@@ -1,0 +1,39 @@
+# Binance Trading Service — Dependencies
+# Python 3.11+ (tested on 3.14)
+
+# Exchange API
+ccxt>=4.3.95
+
+# Data Processing & Indicators
+pandas>=2.2.3
+numpy>=2.0.0
+# Note: pandas-ta not used — indicators implemented natively in src/data/indicators.py
+
+# Web Server / Dashboard
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.4
+python-multipart>=0.0.9
+websockets>=12.0
+
+# Database
+sqlalchemy>=2.0.30
+aiosqlite>=0.20.0
+
+# Scheduler
+APScheduler>=3.10.4
+
+# Configuration
+python-dotenv>=1.0.1
+PyYAML>=6.0.1
+
+# HTTP Client
+httpx>=0.27.0
+aiohttp>=3.9.5
+
+# Logging
+loguru>=0.7.2
+
+# Testing
+pytest>=8.2.0
+pytest-asyncio>=0.23.6

@@ -1,0 +1,72 @@
+# ============================================================
+# Binance Trading Service — Configuration
+# Chỉnh sửa file này để thay đổi tham số chiến lược và risk
+# ============================================================
+
+# --- Trading Settings ---
+trading:
+  # Danh sách symbol giao dịch (Futures)
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+  
+  # Loại thị trường: "futures" hoặc "spot"
+  market_type: futures
+  
+  # Timeframe nến: 1m, 5m, 15m, 1h, 4h, 1d
+  timeframe: "15m"
+  
+  # Số nến lịch sử để tính indicator
+  lookback_candles: 200
+
+# --- MA + MACD Strategy ---
+strategy:
+  name: ma_macd
+  
+  # Moving Average
+  ma_fast: 12        # Fast MA period
+  ma_slow: 26        # Slow MA period
+  ma_type: EMA       # EMA hoặc SMA
+  
+  # MACD Settings (chuẩn mặc định)
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  
+  # Xác nhận thêm: cần cả 2 điều kiện (MA cross + MACD cross) mới vào lệnh
+  require_both_signals: true
+  
+  # Thời gian chờ tối thiểu giữa 2 lần check signal (giây)
+  check_interval_seconds: 60
+
+# --- Risk Management ---
+risk:
+  # Đòn bẩy (Futures)
+  leverage: 5
+  
+  # % số dư USDT dùng cho mỗi lệnh (ví dụ: 0.10 = 10%)
+  position_size_pct: 0.10
+  
+  # Stop Loss: % từ giá vào lệnh
+  stop_loss_pct: 0.02      # 2%
+  
+  # Take Profit: % từ giá vào lệnh
+  take_profit_pct: 0.04    # 4%
+  
+  # Trailing Stop: kích hoạt khi lãi đạt X%, dịch chuyển SL
+  trailing_stop_enabled: true
+  trailing_stop_activation_pct: 0.02  # Kích hoạt khi lãi 2%
+  trailing_stop_callback_pct: 0.01    # Kéo SL lên cách giá 1%
+  
+  # Tối đa số vị thế mở cùng lúc
+  max_open_positions: 2
+  
+  # Margin mode: "isolated" hoặc "cross"
+  margin_mode: isolated
+
+# --- Logging ---
+logging:
+  level: INFO       # DEBUG, INFO, WARNING, ERROR
+  file: logs/trading.log
+  max_size_mb: 50
+  backup_count: 5

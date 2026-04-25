@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Binance Trading Bot — Dashboard</title>
+  <meta name="description" content="Real-time dashboard cho Binance Futures Trading Bot sử dụng MA + MACD strategy" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <svg class="logo-icon" viewBox="0 0 32 32" fill="none">
+          <path d="M16 3L3 9.5V22.5L16 29L29 22.5V9.5L16 3Z" fill="url(#logoGrad)" stroke="rgba(255,255,255,0.2)" stroke-width="0.5"/>
+          <path d="M16 9L10 12.5V19.5L16 23L22 19.5V12.5L16 9Z" fill="rgba(255,255,255,0.15)"/>
+          <circle cx="16" cy="16" r="2.5" fill="white"/>
+          <defs>
+            <linearGradient id="logoGrad" x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#F0B90B"/>
+              <stop offset="100%" stop-color="#E8960C"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <div>
+          <span class="logo-text">TradingBot</span>
+          <span class="logo-sub">Binance Futures</span>
+        </div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <a href="#" class="nav-item active" id="nav-dashboard" onclick="showPage('dashboard')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </a>
+      <a href="#" class="nav-item" id="nav-trades" onclick="showPage('trades')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 10h16M4 14h8M4 18h8"/></svg>
+        Lịch sử Lệnh
+      </a>
+      <a href="#" class="nav-item" id="nav-signals" onclick="showPage('signals')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Tín hiệu
+      </a>
+      <a href="#" class="nav-item" id="nav-chart" onclick="showPage('chart')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+        Biểu đồ
+      </a>
+      <a href="#" class="nav-item" id="nav-config" onclick="showPage('config')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0 0 4.93 19.07M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        Cài đặt
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="mode-badge" id="modeBadge">TESTNET</div>
+      <div class="connection-status" id="connStatus">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Đang kết nối...</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <button class="sidebar-toggle" onclick="toggleSidebar()" id="sidebarToggle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div>
+          <h1 class="page-title" id="pageTitle">Dashboard</h1>
+          <span class="last-update" id="lastUpdate">Đang tải...</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="bot-control">
+          <button class="btn btn-start" id="btnStart" onclick="startBot()">
+            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Khởi động
+          </button>
+          <button class="btn btn-stop hidden" id="btnStop" onclick="stopBot()">
+            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
+            Dừng Bot
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Pages -->
+
+    <!-- ─── Dashboard Page ──────────────────────────────────── -->
+    <div class="page active" id="page-dashboard">
+      <!-- Balance Cards -->
+      <div class="cards-grid" id="balanceCards">
+        <div class="card card-glow">
+          <div class="card-label">Số dư (USDT)</div>
+          <div class="card-value" id="balanceTotal">--</div>
+          <div class="card-sub" id="balanceFree">Khả dụng: --</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Tổng P&L</div>
+          <div class="card-value" id="totalPnl">--</div>
+          <div class="card-sub" id="winRate">Win Rate: --</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Tổng lệnh</div>
+          <div class="card-value" id="totalTrades">--</div>
+          <div class="card-sub" id="winLoss">Thắng / Thua: --</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Vị thế đang mở</div>
+          <div class="card-value" id="openPositions">--</div>
+          <div class="card-sub">Futures USDT-M</div>
+        </div>
+      </div>
+
+      <!-- Positions Table -->
+      <div class="section">
+        <div class="section-header">
+          <h2 class="section-title">Vị thế đang mở</h2>
+          <button class="btn btn-sm" onclick="refreshPositions()">Làm mới</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="positionsTable">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Size</th>
+                <th>Entry Price</th>
+                <th>Leverage</th>
+                <th>Unrealized P&L</th>
+                <th>Liq. Price</th>
+              </tr>
+            </thead>
+            <tbody id="positionsBody">
+              <tr><td colspan="7" class="empty-row">Không có vị thế nào</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recent Trades -->
+      <div class="section">
+        <div class="section-header">
+          <h2 class="section-title">Lệnh gần đây</h2>
+          <a href="#" class="link-all" onclick="showPage('trades')">Xem tất cả →</a>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="recentTradesTable">
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Amount</th>
+                <th>Avg Price</th>
+                <th>Signal</th>
+                <th>P&L</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="recentTradesBody">
+              <tr><td colspan="8" class="empty-row">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Trades Page ─────────────────────────────────────── -->
+    <div class="page hidden" id="page-trades">
+      <div class="section">
+        <div class="section-header">
+          <h2 class="section-title">Lịch sử giao dịch</h2>
+          <button class="btn btn-sm" onclick="loadTrades()">Làm mới</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Avg Price</th>
+                <th>Cost</th>
+                <th>P&L</th>
+                <th>Signal</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="allTradesBody">
+              <tr><td colspan="10" class="empty-row">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Signals Page ────────────────────────────────────── -->
+    <div class="page hidden" id="page-signals">
+      <div class="section">
+        <div class="section-header">
+          <h2 class="section-title">Lịch sử tín hiệu MA+MACD</h2>
+          <button class="btn btn-sm" onclick="loadSignals()">Làm mới</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Symbol</th>
+                <th>Signal</th>
+                <th>Price</th>
+                <th>MA Fast</th>
+                <th>MA Slow</th>
+                <th>MACD</th>
+                <th>Signal Line</th>
+                <th>Histogram</th>
+                <th>Executed</th>
+              </tr>
+            </thead>
+            <tbody id="signalsBody">
+              <tr><td colspan="10" class="empty-row">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Chart Page ──────────────────────────────────────── -->
+    <div class="page hidden" id="page-chart">
+      <div class="section">
+        <div class="section-header">
+          <h2 class="section-title">Biểu đồ & Indicators</h2>
+          <div class="chart-controls">
+            <select id="chartSymbol" class="select-input" onchange="loadChart()">
+              <option value="BTC">BTC/USDT</option>
+              <option value="ETH">ETH/USDT</option>
+            </select>
+            <select id="chartTimeframe" class="select-input" onchange="loadChart()">
+              <option value="5m">5m</option>
+              <option value="15m" selected>15m</option>
+              <option value="1h">1h</option>
+              <option value="4h">4h</option>
+            </select>
+            <button class="btn btn-sm" onclick="loadChart()">Tải lại</button>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="priceChart"></canvas>
+        </div>
+        <div class="chart-container chart-container--sm">
+          <canvas id="macdChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Config Page ─────────────────────────────────────── -->
+    <div class="page hidden" id="page-config">
+      <div class="config-grid">
+        <div class="section">
+          <h2 class="section-title">Cấu hình Strategy</h2>
+          <div class="config-info">
+            <p>⚠️ Để thay đổi cấu hình, chỉnh sửa file <code>config.yaml</code> và khởi động lại bot.</p>
+          </div>
+          <div class="config-view" id="configView">Đang tải...</div>
+        </div>
+        <div class="section">
+          <h2 class="section-title">Hướng dẫn Binance Testnet</h2>
+          <div class="guide-steps">
+            <div class="guide-step">
+              <div class="step-num">1</div>
+              <div>
+                <strong>Truy cập Testnet</strong>
+                <p>Mở <a href="https://testnet.binancefuture.com" target="_blank" class="link">testnet.binancefuture.com</a></p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="step-num">2</div>
+              <div>
+                <strong>Đăng nhập bằng GitHub</strong>
+                <p>Không cần KYC, dùng tài khoản GitHub để đăng nhập</p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="step-num">3</div>
+              <div>
+                <strong>Tạo API Key</strong>
+                <p>Vào <strong>API Key → Generate API Key</strong></p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="step-num">4</div>
+              <div>
+                <strong>Cấu hình .env</strong>
+                <p>Copy <code>.env.example</code> thành <code>.env</code> và điền key</p>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="step-num">5</div>
+              <div>
+                <strong>Khởi động Bot</strong>
+                <p>Nhấn nút <strong>Khởi động</strong> ở góc trên phải</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Toast Notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
