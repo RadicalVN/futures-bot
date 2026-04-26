@@ -39,7 +39,8 @@
     <div class="logo">🚀 Bot Platform</div>
     <div class="nav-item active" onclick="showPage('dashboard')">📊 Tổng quan (Dashboard)</div>
     <div class="nav-item" onclick="showPage('mybots')">🤖 Danh sách Bot</div>
-    <div class="nav-item" onclick="showPage('market')">🛒 Quản lý Tín hiệu</div>
+    <div class="nav-item" onclick="showPage('indicators')">📈 Chỉ báo kỹ thuật</div>
+    <div class="nav-item" onclick="showPage('strategies')">🎯 Chiến lược giao dịch</div>
     <div class="nav-item" onclick="showPage('settings')">⚙️ Cài đặt</div>
   </aside>
 
@@ -95,19 +96,29 @@
     <div id="page-mybots" class="page">
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <h2>🤖 Danh sách Bot của Tôi</h2>
-        <button class="btn btn-primary" onclick="showPage('market')">+ Tạo Bot Mới</button>
+        <button class="btn btn-primary" onclick="showPage('strategies')">+ Tạo Bot Mới</button>
       </div>
       <div id="botsGrid" class="bot-grid">
         <div class="empty-state">Đang tải dữ liệu...</div>
       </div>
     </div>
 
-    <!-- PAGE: SIGNAL MANAGEMENT (Tín hiệu & Chỉ báo) -->
-    <div id="page-market" class="page">
-      <h2>🛒 Quản lý Tín hiệu & Chỉ báo (Signals)</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 20px;">Thêm các chỉ báo kỹ thuật có sẵn hoặc sử dụng tín hiệu Custom Webhook của bạn.</p>
+    <!-- PAGE: INDICATORS (Chỉ báo kỹ thuật) -->
+    <div id="page-indicators" class="page">
+      <h2>📈 Quản lý Chỉ báo kỹ thuật</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">Cấu hình và quản lý các chỉ báo kỹ thuật hiển thị trên biểu đồ Dashboard.</p>
       
-      <h3>✅ Tín hiệu đang sử dụng</h3>
+      <div id="indicatorsList" class="bot-grid" style="margin-top: 15px;">
+        <!-- JS render here -->
+      </div>
+    </div>
+
+    <!-- PAGE: STRATEGY MANAGEMENT (Chiến lược giao dịch) -->
+    <div id="page-strategies" class="page">
+      <h2>🎯 Chiến lược giao dịch</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">Chọn chiến lược giao dịch có sẵn để tạo Bot.</p>
+      
+      <h3>✅ Chiến lược yêu thích</h3>
       <div id="activeSignalsGrid" class="bot-grid" style="margin-bottom: 30px;">
         <!-- Dữ liệu được render từ JS -->
       </div>
@@ -115,8 +126,8 @@
       <hr style="border-color: var(--border); margin-bottom: 20px;">
 
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-        <h3>➕ Thêm Chỉ báo hệ thống</h3>
-        <input type="text" id="searchSignal" class="form-control" style="width: 300px; padding: 8px;" placeholder="🔍 Tìm kiếm chỉ báo (VD: RSI, MA...)" onkeyup="filterAvailableSignals()">
+        <h3>➕ Thêm Chiến lược mới</h3>
+        <input type="text" id="searchSignal" class="form-control" style="width: 300px; padding: 8px;" placeholder="🔍 Tìm kiếm chiến lược..." onkeyup="filterAvailableSignals()">
       </div>
       <div id="availableSignalsGrid" class="bot-grid">
         <!-- Dữ liệu được render từ JS -->
@@ -125,7 +136,7 @@
 
     <!-- PAGE: STRATEGY DETAIL & SETUP -->
     <div id="page-strategy-detail" class="page">
-      <button class="btn btn-sm" style="margin-bottom: 20px; background: var(--bg-panel); color: #fff;" onclick="showPage('market')">⬅ Quay lại Chợ</button>
+      <button class="btn btn-sm" style="margin-bottom: 20px; background: var(--bg-panel); color: #fff;" onclick="showPage('strategies')">⬅ Quay lại danh sách</button>
       <h2 id="detailTitle">Chi tiết Chiến Thuật</h2>
       
       <div class="two-col">

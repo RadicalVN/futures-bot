@@ -18,7 +18,8 @@ function showPage(pageId) {
   if(pageId === 'dashboard') loadDashboard();
   if(pageId === 'mybots') fetchBots();
   if(pageId === 'settings') loadSettings();
-  if(pageId === 'market') renderSignalsManagement();
+  if(pageId === 'strategies') renderSignalsManagement();
+  if(pageId === 'indicators') renderIndicatorsManagement();
 }
 
 // Toast Notification
@@ -31,10 +32,64 @@ function showToast(message, type='info') {
   setTimeout(() => toast.remove(), 3000);
 }
 
+// ================= INDICATORS MANAGEMENT =================
+const AVAILABLE_INDICATORS = [
+  { id: 'custom_sma', name: 'Custom SMA (ittuantruong)', desc: 'Hệ thống dải băng (up/dn) và hệ số an toàn (factor)' },
+  { id: 'custom_macd', name: 'Custom MACD (TuanTV1008)', desc: 'Cực nhạy, sử dụng Signal Length dài hạn' }
+];
+
+let activeIndicatorsIds = JSON.parse(localStorage.getItem('activeIndicators')) || ['custom_sma', 'custom_macd'];
+
+function saveActiveIndicators() {
+  localStorage.setItem('activeIndicators', JSON.stringify(activeIndicatorsIds));
+}
+
+function toggleIndicator(id) {
+  if (activeIndicatorsIds.includes(id)) {
+    activeIndicatorsIds = activeIndicatorsIds.filter(x => x !== id);
+  } else {
+    activeIndicatorsIds.push(id);
+  }
+  saveActiveIndicators();
+  renderIndicatorsManagement();
+  
+  // Tải lại biểu đồ nếu đang ở dashboard
+  if(document.getElementById('page-dashboard').classList.contains('active')) {
+    loadChart();
+  } else {
+    showToast('Đã cập nhật biểu đồ', 'success');
+  }
+}
+
+function renderIndicatorsManagement() {
+  const list = document.getElementById('indicatorsList');
+  if(!list) return;
+  
+  let html = '';
+  AVAILABLE_INDICATORS.forEach(ind => {
+    const isActive = activeIndicatorsIds.includes(ind.id);
+    html += `
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: start;">
+          <div>
+            <h3 style="color: ${isActive ? 'var(--accent)' : 'var(--text-primary)'}; margin-bottom: 8px;">${ind.name}</h3>
+            <p style="color: var(--text-secondary); font-size: 13px;">${ind.desc}</p>
+          </div>
+          <label class="switch" style="position: relative; display: inline-block; width: 40px; height: 20px;">
+            <input type="checkbox" ${isActive ? 'checked' : ''} onchange="toggleIndicator('${ind.id}')" style="opacity: 0; width: 0; height: 0;">
+            <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: ${isActive ? '#0ecb81' : '#333'}; border-radius: 20px; transition: .4s;">
+              <span style="position: absolute; height: 16px; width: 16px; left: ${isActive ? '22px' : '2px'}; bottom: 2px; background-color: white; border-radius: 50%; transition: .4s;"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+    `;
+  });
+  list.innerHTML = html;
+}
+
 // ================= SIGNAL MANAGEMENT =================
 const AVAILABLE_SIGNALS = [
-  { id: 'custom_sma', name: 'Custom SMA (ittuantruong)', desc: 'Chỉ báo Custom SMA bắt xu hướng bằng hệ thống dải băng (up/dn) và hệ số an toàn (factor). Tín hiệu Mua/Bán cực kỳ sát với biến động.', pros: ['Chống nhiễu tốt trong sideway', 'Bám sát đỉnh/đáy', 'Code độc quyền từ Pine Script'], defaultParams: `{\n  "timeframe": "15m",\n  "max_open_positions": 5,\n  "leverage": 5,\n  "fast_length": 1,\n  "slow_length": 5,\n  "len_c": 20,\n  "factor": 0.05\n}` },
-  { id: 'custom_macd', name: 'Custom MACD (TuanTV1008)', desc: 'Chỉ báo Custom MACD cực nhạy. Sử dụng Signal Length dài hạn để xác nhận độ lớn của Trend.', pros: ['Kết hợp tùy chọn SMA/EMA linh hoạt', 'Tín hiệu giao cắt cực kỳ chuẩn xác', 'Không bị lừa bởi tín hiệu giả'], defaultParams: `{\n  "timeframe": "15m",\n  "max_open_positions": 5,\n  "leverage": 5,\n  "fast_length": 12,\n  "slow_length": 26,\n  "signal_length": 500,\n  "sma_source": "EMA",\n  "sma_signal": "EMA"\n}` },
   { id: 'ma_macd', name: 'MA + MACD Trend Following', desc: 'Bắt xu hướng mạnh mẽ bằng cách kết hợp Đường trung bình động và MACD Momentum.', pros: ['Ít nhiễu, tỷ lệ chính xác cao khi có trend', 'Dễ dàng cấu hình và hiểu nguyên lý', 'Tích hợp sẵn quản lý rủi ro (Take Profit / Stop Loss)'], defaultParams: `{\n  "timeframe": "15m",\n  "max_open_positions": 5,\n  "leverage": 5,\n  "fast_ma": 10,\n  "slow_ma": 30\n}` },
   { id: 'rsi_reversal', name: 'RSI Reversal (Quá mua/Quá bán)', desc: 'Bắt đỉnh/đáy ngắn hạn dựa trên chỉ báo RSI. Phù hợp cho thị trường đi ngang (Sideway).', pros: ['Hiệu quả trong thị trường biên độ hẹp', 'Tín hiệu rõ ràng ở vùng 30/70'], defaultParams: `{\n  "timeframe": "5m",\n  "rsi_period": 14,\n  "overbought": 70,\n  "oversold": 30\n}` },
   { id: 'bollinger_breakout', name: 'Bollinger Bands Breakout', desc: 'Giao dịch khi nến phá vỡ dải băng Bollinger, đón lõng biến động mạnh.', pros: ['Bắt trọn sóng lớn khi phá vỡ', 'Độ tin cậy cao'], defaultParams: `{\n  "timeframe": "1h",\n  "bb_period": 20,\n  "bb_std": 2\n}` },
@@ -373,96 +428,146 @@ function renderChart(data) {
     const macdData = data.map(d => ({x: d.x, y: d.macd}));
     const macdSignalData = data.map(d => ({x: d.x, y: d.macd_signal}));
 
+    let datasets = [
+        {
+            label: 'Giá',
+            data: data,
+            color: { up: '#0ecb81', down: '#f6465d', unchanged: '#8892a4' },
+            yAxisID: 'y'
+        }
+    ];
+
+    if (activeIndicatorsIds.includes('custom_sma')) {
+        datasets.push({
+            type: 'line',
+            label: 'SMA Up',
+            data: smaUpData,
+            borderColor: '#2196F3',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            yAxisID: 'y'
+        });
+        datasets.push({
+            type: 'line',
+            label: 'SMA Down',
+            data: smaDnData,
+            borderColor: '#FFEB3B',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            yAxisID: 'y'
+        });
+    }
+
+    if (activeIndicatorsIds.includes('custom_macd')) {
+        const histData = macdData.map((d, i) => {
+            let val = null;
+            if (d.y !== null && macdSignalData[i] && macdSignalData[i].y !== null) {
+                val = d.y - macdSignalData[i].y;
+            }
+            return { x: d.x, y: val };
+        });
+
+        // Histogram (Cột)
+        datasets.push({
+            type: 'bar',
+            label: 'MACD Hist',
+            data: histData,
+            backgroundColor: histData.map(d => d.y !== null && d.y >= 0 ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)'),
+            yAxisID: 'y_macd'
+        });
+
+        datasets.push({
+            type: 'line',
+            label: 'MACD',
+            data: macdData,
+            borderColor: '#2962FF',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            yAxisID: 'y_macd'
+        });
+        datasets.push({
+            type: 'line',
+            label: 'MACD Signal',
+            data: macdSignalData,
+            borderColor: '#FF6D00',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            yAxisID: 'y_macd'
+        });
+    }
+
+    let chartScales = {
+        x: {
+            type: 'time',
+            time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            ticks: { color: '#8892a4' }
+        },
+        y: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            ticks: { color: '#8892a4' }
+        }
+    };
+
+    if (activeIndicatorsIds.includes('custom_macd')) {
+        chartScales.y.stack = 'main';
+        chartScales.y.stackWeight = 3;
+        
+        // Pane bên dưới cho MACD
+        chartScales.y_macd = {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            grid: { color: 'rgba(255,255,255,0.05)', drawOnChartArea: true },
+            ticks: { color: '#8892a4' },
+            stack: 'main',
+            stackWeight: 1
+        };
+    }
+
+    // Plugin tùy chỉnh để vẽ đường phân cách và làm nổi bật 2 block
+    const splitPanePlugin = {
+        id: 'splitPane',
+        beforeDraw(chart) {
+            if (!chart.scales.y_macd) return;
+            const ctx = chart.ctx;
+            const yMacdAxis = chart.scales.y_macd;
+            
+            ctx.save();
+            // Background cho block MACD
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)'; // Nền tối hơn chút
+            ctx.fillRect(chart.chartArea.left, yMacdAxis.top, chart.chartArea.right - chart.chartArea.left, yMacdAxis.bottom - yMacdAxis.top);
+
+            // Đường phân cách ngang rõ nét
+            ctx.beginPath();
+            ctx.moveTo(chart.chartArea.left, yMacdAxis.top);
+            ctx.lineTo(chart.chartArea.right, yMacdAxis.top);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#444'; // Màu border phân cách
+            ctx.stroke();
+            ctx.restore();
+        }
+    };
+
     chartInstance = new Chart(ctx, {
         type: 'candlestick',
-        data: {
-            datasets: [
-                {
-                    label: 'Giá',
-                    data: data,
-                    color: { up: '#0ecb81', down: '#f6465d', unchanged: '#8892a4' },
-                    yAxisID: 'y'
-                },
-                {
-                    type: 'line',
-                    label: 'SMA Up',
-                    data: smaUpData,
-                    borderColor: '#2196F3', // blue
-                    borderWidth: 1.5,
-                    pointRadius: 0,
-                    yAxisID: 'y'
-                },
-                {
-                    type: 'line',
-                    label: 'SMA Down',
-                    data: smaDnData,
-                    borderColor: '#FFEB3B', // yellow
-                    borderWidth: 1.5,
-                    pointRadius: 0,
-                    yAxisID: 'y'
-                },
-                {
-                    type: 'line',
-                    label: 'MACD',
-                    data: macdData,
-                    borderColor: '#2962FF',
-                    borderWidth: 1.5,
-                    pointRadius: 0,
-                    yAxisID: 'y_macd'
-                },
-                {
-                    type: 'line',
-                    label: 'MACD Signal',
-                    data: macdSignalData,
-                    borderColor: '#FF6D00',
-                    borderWidth: 1.5,
-                    pointRadius: 0,
-                    yAxisID: 'y_macd'
-                }
-            ]
-        },
+        data: { datasets: datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            scales: {
-                x: {
-                    type: 'time',
-                    time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
-                    grid: { color: 'rgba(255,255,255,0.05)' },
-                    ticks: { color: '#8892a4' }
-                },
-                y: {
-                    type: 'linear',
-                    display: true,
-                    position: 'right',
-                    grid: { color: 'rgba(255,255,255,0.05)' },
-                    ticks: { color: '#8892a4' }
-                },
-                y_macd: {
-                    type: 'linear',
-                    display: true,
-                    position: 'left',
-                    grid: { display: false },
-                    ticks: { color: '#8892a4' },
-                    // Giới hạn MACD ở khu vực dưới biểu đồ (tùy chọn)
-                    // Nếu muốn MACD và nến không bị đè lên nhau quá nhiều
-                }
-            },
+            scales: chartScales,
             plugins: {
                 legend: { display: true, labels: { color: '#8892a4' } },
                 zoom: {
-                    pan: {
-                        enabled: true,
-                        mode: 'x'
-                    },
-                    zoom: {
-                        wheel: { enabled: true },
-                        pinch: { enabled: true },
-                        mode: 'x'
-                    }
+                    pan: { enabled: true, mode: 'x' },
+                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' }
                 }
             }
-        }
+        },
+        plugins: [splitPanePlugin]
     });
 }
 
