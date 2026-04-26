@@ -20,3 +20,4 @@ Một Trading Bot tự động chuyên giao dịch trên sàn Binance (USDT-M Pe
 ## Tài liệu (Docs)
 - [Kế hoạch & Cấu trúc (Plan)](docs/plan.md)
 - [Lịch sử Cập nhật (Changelog)](docs/history.md)
+- [Tính năng & Bố cục UI V2 (Features)](docs/v2_features.md)

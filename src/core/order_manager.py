@@ -9,7 +9,7 @@ from src.core.exchange import BinanceExchange
 from src.core.risk_manager import RiskManager, PositionPlan
 from src.strategies.base_strategy import StrategySignal
 from src.database.db import get_db
-from src.database.models import Trade, Signal, BotStatus
+from src.database.models import Trade, Signal, Bot
 from sqlalchemy import select
 
 
@@ -144,6 +144,7 @@ class OrderManager:
         ind = indicator_data or {}
         async with get_db() as db:
             sig = Signal(
+                bot_id=getattr(self, 'bot_id', None),
                 symbol=signal.symbol,
                 signal_type=signal.signal,
                 price=signal.price,
@@ -153,7 +154,6 @@ class OrderManager:
                 macd_signal=ind.get("macd_signal"),
                 macd_histogram=ind.get("macd_histogram"),
                 executed=signal.is_entry or signal.is_exit,
-                execution_reason=signal.reason,
             )
             db.add(sig)
 
@@ -161,6 +161,7 @@ class OrderManager:
         """Lưu trade thành công vào database"""
         async with get_db() as db:
             trade = Trade(
+                bot_id=getattr(self, 'bot_id', None),
                 order_id=str(order.get("id", "")),
                 symbol=plan.symbol,
                 side=plan.side,
@@ -177,17 +178,18 @@ class OrderManager:
             db.add(trade)
 
             # Update bot stats
-            result = await db.execute(select(BotStatus).where(BotStatus.id == 1))
-            bot_status = result.scalar_one_or_none()
-            if bot_status:
-                bot_status.total_trades += 1
-                bot_status.last_signal_at = datetime.utcnow()
+            if getattr(self, 'bot_id', None):
+                result = await db.execute(select(Bot).where(Bot.id == self.bot_id))
+                bot_status = result.scalar_one_or_none()
+                if bot_status:
+                        bot_status.total_trades += 1
 
     async def _save_failed_trade(self, symbol: str, side: str, plan: PositionPlan,
                                   signal: StrategySignal, error: str):
         """Lưu trade thất bại vào database"""
         async with get_db() as db:
             trade = Trade(
+                bot_id=getattr(self, 'bot_id', None),
                 order_id=f"failed_{datetime.utcnow().timestamp()}",
                 symbol=symbol,
                 side=side,
@@ -215,16 +217,17 @@ class OrderManager:
                 trade.closed_at = datetime.utcnow()
 
             # Update bot stats
-            result2 = await db.execute(select(BotStatus).where(BotStatus.id == 1))
-            bot_status = result2.scalar_one_or_none()
-            if bot_status:
-                pnl = order.get("info", {}).get("realizedPnl", 0)
-                try:
-                    pnl = float(pnl)
-                    bot_status.total_pnl += pnl
-                    if pnl > 0:
-                        bot_status.winning_trades += 1
-                    elif pnl < 0:
-                        bot_status.losing_trades += 1
-                except (ValueError, TypeError):
-                    pass
+            if getattr(self, 'bot_id', None):
+                result2 = await db.execute(select(Bot).where(Bot.id == self.bot_id))
+                bot = result2.scalar_one_or_none()
+                if bot:
+                    pnl = order.get("info", {}).get("realizedPnl", 0)
+                    try:
+                        pnl = float(pnl)
+                        bot.total_pnl += pnl
+                        if pnl > 0:
+                            bot.winning_trades += 1
+                        elif pnl < 0:
+                            bot.losing_trades += 1
+                    except (ValueError, TypeError):
+                        pass

@@ -5,10 +5,9 @@ Sử dụng SQLAlchemy async với SQLite (dễ migrate sang PostgreSQL trên VP
 import os
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select
 from loguru import logger
 
-from .models import Base, BotStatus
+from .models import Base
 
 
 # Đọc DATABASE_URL từ env, mặc định là SQLite
@@ -19,7 +18,7 @@ os.makedirs("data", exist_ok=True)
 
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False,  # Đặt True để xem SQL queries khi debug
+    echo=False,
     connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
 )
 
@@ -35,16 +34,7 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
-    # Tạo row BotStatus mặc định nếu chưa có
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(BotStatus).where(BotStatus.id == 1))
-        bot_status = result.scalar_one_or_none()
-        if not bot_status:
-            status = BotStatus(id=1, is_running=False)
-            session.add(status)
-            await session.commit()
-    
-    logger.info(f"✅ Database đã sẵn sàng: {DATABASE_URL}")
+    logger.info(f"Database đã sẵn sàng: {DATABASE_URL}")
 
 
 @asynccontextmanager
