@@ -8,6 +8,7 @@ from loguru import logger
 import asyncio
 import json
 from datetime import datetime
+import pandas as pd
 
 from src.database.db import init_db, get_db
 from src.database.models import Trade, Signal, Bot, ExchangeAccount, BotEvent
@@ -199,7 +200,7 @@ async def get_symbols():
 
 
 @app.get("/api/chart-data/{symbol:path}")
-async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 100):
+async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000):
     from src.core.exchange import create_exchange_from_env
     exchange = create_exchange_from_env()
     try:
@@ -208,13 +209,26 @@ async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 100):
         await exchange.close()
         
         formatted_data = []
-        for row in ohlcv:
+        from src.data.indicators import ohlcv_to_dataframe, add_custom_sma_to_df, add_custom_macd_to_df
+        df = ohlcv_to_dataframe(ohlcv)
+        df = add_custom_sma_to_df(df)
+        df = add_custom_macd_to_df(df)
+        
+        # Nan to None for JSON
+        df = df.where(pd.notnull(df), None)
+
+        for idx, row in df.iterrows():
             formatted_data.append({
-                "x": row[0],
-                "o": row[1],
-                "h": row[2],
-                "l": row[3],
-                "c": row[4],
+                "x": int(idx.timestamp() * 1000),
+                "o": row['open'],
+                "h": row['high'],
+                "l": row['low'],
+                "c": row['close'],
+                "sma_up": row['custom_sma_up'],
+                "sma_dn": row['custom_sma_dn'],
+                "sma_trend": row['custom_sma_trend'],
+                "macd": row['custom_macd'],
+                "macd_signal": row['custom_macd_signal']
             })
         return {"symbol": symbol, "data": formatted_data}
     except Exception as e:

@@ -8,6 +8,8 @@ from src.core.exchange import BinanceExchange, create_exchange_from_env
 from src.core.order_manager import OrderManager
 from src.core.risk_manager import RiskManager
 from src.strategies.ma_macd import MaMacdStrategy
+from src.strategies.custom_sma import CustomSMAStrategy
+from src.strategies.custom_macd import CustomMACDStrategy
 from src.database.db import get_db
 from src.database.models import Bot
 
@@ -71,6 +73,12 @@ class BotEngine:
         # Init Strategy
         if self.strategy_name == "ma_macd":
             self.strategy = MaMacdStrategy(self.parameters)
+        elif self.strategy_name == "custom_sma":
+            self.strategy = CustomSMAStrategy(self.parameters)
+        elif self.strategy_name == "custom_macd":
+            # Chỉnh lookback lớn hơn để đủ dữ liệu cho MACD signal_length (mặc định 500)
+            self.lookback = max(self.lookback, int(self.parameters.get("signal_length", 500)) + 50)
+            self.strategy = CustomMACDStrategy(self.parameters)
         else:
             raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")
 

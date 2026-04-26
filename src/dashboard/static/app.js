@@ -33,6 +33,8 @@ function showToast(message, type='info') {
 
 // ================= SIGNAL MANAGEMENT =================
 const AVAILABLE_SIGNALS = [
+  { id: 'custom_sma', name: 'Custom SMA (ittuantruong)', desc: 'Chỉ báo Custom SMA bắt xu hướng bằng hệ thống dải băng (up/dn) và hệ số an toàn (factor). Tín hiệu Mua/Bán cực kỳ sát với biến động.', pros: ['Chống nhiễu tốt trong sideway', 'Bám sát đỉnh/đáy', 'Code độc quyền từ Pine Script'], defaultParams: `{\n  "timeframe": "15m",\n  "max_open_positions": 5,\n  "leverage": 5,\n  "fast_length": 1,\n  "slow_length": 5,\n  "len_c": 20,\n  "factor": 0.05\n}` },
+  { id: 'custom_macd', name: 'Custom MACD (TuanTV1008)', desc: 'Chỉ báo Custom MACD cực nhạy. Sử dụng Signal Length dài hạn để xác nhận độ lớn của Trend.', pros: ['Kết hợp tùy chọn SMA/EMA linh hoạt', 'Tín hiệu giao cắt cực kỳ chuẩn xác', 'Không bị lừa bởi tín hiệu giả'], defaultParams: `{\n  "timeframe": "15m",\n  "max_open_positions": 5,\n  "leverage": 5,\n  "fast_length": 12,\n  "slow_length": 26,\n  "signal_length": 500,\n  "sma_source": "EMA",\n  "sma_signal": "EMA"\n}` },
   { id: 'ma_macd', name: 'MA + MACD Trend Following', desc: 'Bắt xu hướng mạnh mẽ bằng cách kết hợp Đường trung bình động và MACD Momentum.', pros: ['Ít nhiễu, tỷ lệ chính xác cao khi có trend', 'Dễ dàng cấu hình và hiểu nguyên lý', 'Tích hợp sẵn quản lý rủi ro (Take Profit / Stop Loss)'], defaultParams: `{\n  "timeframe": "15m",\n  "max_open_positions": 5,\n  "leverage": 5,\n  "fast_ma": 10,\n  "slow_ma": 30\n}` },
   { id: 'rsi_reversal', name: 'RSI Reversal (Quá mua/Quá bán)', desc: 'Bắt đỉnh/đáy ngắn hạn dựa trên chỉ báo RSI. Phù hợp cho thị trường đi ngang (Sideway).', pros: ['Hiệu quả trong thị trường biên độ hẹp', 'Tín hiệu rõ ràng ở vùng 30/70'], defaultParams: `{\n  "timeframe": "5m",\n  "rsi_period": 14,\n  "overbought": 70,\n  "oversold": 30\n}` },
   { id: 'bollinger_breakout', name: 'Bollinger Bands Breakout', desc: 'Giao dịch khi nến phá vỡ dải băng Bollinger, đón lõng biến động mạnh.', pros: ['Bắt trọn sóng lớn khi phá vỡ', 'Độ tin cậy cao'], defaultParams: `{\n  "timeframe": "1h",\n  "bb_period": 20,\n  "bb_std": 2\n}` },
@@ -365,18 +367,59 @@ function renderChart(data) {
         chartInstance.destroy();
     }
     
+    // Prepare indicator data
+    const smaUpData = data.map(d => ({x: d.x, y: d.sma_up === 0 ? null : d.sma_up}));
+    const smaDnData = data.map(d => ({x: d.x, y: d.sma_dn === 0 ? null : d.sma_dn}));
+    const macdData = data.map(d => ({x: d.x, y: d.macd}));
+    const macdSignalData = data.map(d => ({x: d.x, y: d.macd_signal}));
+
     chartInstance = new Chart(ctx, {
         type: 'candlestick',
         data: {
-            datasets: [{
-                label: 'Giá (Candlestick)',
-                data: data,
-                color: {
-                    up: '#0ecb81',
-                    down: '#f6465d',
-                    unchanged: '#8892a4',
+            datasets: [
+                {
+                    label: 'Giá',
+                    data: data,
+                    color: { up: '#0ecb81', down: '#f6465d', unchanged: '#8892a4' },
+                    yAxisID: 'y'
+                },
+                {
+                    type: 'line',
+                    label: 'SMA Up',
+                    data: smaUpData,
+                    borderColor: '#2196F3', // blue
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    yAxisID: 'y'
+                },
+                {
+                    type: 'line',
+                    label: 'SMA Down',
+                    data: smaDnData,
+                    borderColor: '#FFEB3B', // yellow
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    yAxisID: 'y'
+                },
+                {
+                    type: 'line',
+                    label: 'MACD',
+                    data: macdData,
+                    borderColor: '#2962FF',
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    yAxisID: 'y_macd'
+                },
+                {
+                    type: 'line',
+                    label: 'MACD Signal',
+                    data: macdSignalData,
+                    borderColor: '#FF6D00',
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    yAxisID: 'y_macd'
                 }
-            }]
+            ]
         },
         options: {
             responsive: true,
@@ -389,13 +432,35 @@ function renderChart(data) {
                     ticks: { color: '#8892a4' }
                 },
                 y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
                     grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: { color: '#8892a4' }
+                },
+                y_macd: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    grid: { display: false },
                     ticks: { color: '#8892a4' },
-                    position: 'right'
+                    // Giới hạn MACD ở khu vực dưới biểu đồ (tùy chọn)
+                    // Nếu muốn MACD và nến không bị đè lên nhau quá nhiều
                 }
             },
             plugins: {
-                legend: { display: false }
+                legend: { display: true, labels: { color: '#8892a4' } },
+                zoom: {
+                    pan: {
+                        enabled: true,
+                        mode: 'x'
+                    },
+                    zoom: {
+                        wheel: { enabled: true },
+                        pinch: { enabled: true },
+                        mode: 'x'
+                    }
+                }
             }
         }
     });
