@@ -10,7 +10,10 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
+    
+  <!-- ES6 Modules Entrypoint -->
+  <script type="module" src="/static/js/main.js"></script>
   <style>
     /* Bổ sung thêm một số style cho layout mới */
     .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px; }
@@ -223,6 +226,5 @@
   </main>
 
   <div id="toastContainer"></div>
-  <script src="/static/app.js?v=10"></script>
 </body>
 </html>
