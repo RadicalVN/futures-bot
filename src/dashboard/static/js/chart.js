@@ -1,10 +1,12 @@
 import { api } from './api.js';
 
-let chartInstance = null;
-let chartAutoRefreshInterval = null;
-let chartTimeTrackerInterval = null;
-let lastChartUpdateTime = null;
-let isFetchingOlderData = false;
+let chartInstances = {1: null, 2: null};
+let chartAutoRefreshIntervals = {1: null, 2: null};
+let chartTimeTrackerIntervals = {1: null, 2: null};
+let lastChartUpdateTimes = {1: null, 2: null};
+let isFetchingOlderDataMap = {1: false, 2: false};
+
+const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
 
 export async function populateSymbolsDatalist() {
   try {
@@ -19,18 +21,148 @@ export async function populateSymbolsDatalist() {
   }
 }
 
-export function resetChartConfig() {
+export function globalReset() {
     localStorage.removeItem('chartHiddenStates');
-    loadChart();
+    loadChart(1);
+    loadChart(2);
 }
 
-export async function loadChart() {
-    const symbolInput = document.getElementById('chartSymbol');
-    const timeframeSelect = document.getElementById('chartTimeframe');
+export function globalRefresh() {
+    loadChart(1);
+    loadChart(2);
+}
+
+export function toggleLegendMenu(chartId) {
+    const menu = document.getElementById(`chartLegend${chartId}`);
+    if (menu) {
+        if (menu.style.display === 'none') {
+            menu.style.display = 'flex';
+            renderHtmlLegend(chartId);
+        } else {
+            menu.style.display = 'none';
+        }
+    }
+}
+
+function renderHtmlLegend(chartId) {
+    const menu = document.getElementById(`chartLegend${chartId}`);
+    const chart = chartInstances[chartId];
+    if (!chart || !menu) return;
+    
+    let html = '';
+    chart.data.datasets.forEach((ds, idx) => {
+        const meta = chart.getDatasetMeta(idx);
+        const isHidden = meta.hidden === null ? ds.hidden : meta.hidden;
+        
+        let color = '#888';
+        if (ds.borderColor && typeof ds.borderColor === 'string' && ds.borderColor !== 'transparent') color = ds.borderColor;
+        else if (ds.backgroundColor && typeof ds.backgroundColor === 'string' && ds.backgroundColor !== 'transparent') color = ds.backgroundColor;
+        else if (ds.label === 'Giá') color = '#0ecb81';
+        else if (ds.label === 'TVT-Trend') color = '#2196F3';
+        
+        html += `
+        <div class="legend-item" onclick="toggleDataset(${chartId}, ${idx})" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: ${isHidden ? '#666' : 'var(--text-primary)'}; text-decoration: ${isHidden ? 'line-through' : 'none'}; padding: 4px;">
+            <div style="width: 12px; height: 12px; border-radius: 2px; background: ${color}; border: 1px solid rgba(255,255,255,0.2); opacity: ${isHidden ? 0.3 : 1};"></div>
+            <span>${ds.label}</span>
+        </div>`;
+    });
+    menu.innerHTML = html;
+}
+
+export function toggleDataset(chartId, datasetIndex) {
+    const chart = chartInstances[chartId];
+    const meta = chart.getDatasetMeta(datasetIndex);
+    const ds = chart.data.datasets[datasetIndex];
+    
+    const isCurrentlyHidden = meta.hidden === null ? ds.hidden : meta.hidden;
+    const willBeHidden = !isCurrentlyHidden;
+    
+    meta.hidden = willBeHidden;
+    ds.hidden = willBeHidden;
+    
+    let states = JSON.parse(localStorage.getItem('chartHiddenStates')) || {};
+    states[ds.label] = willBeHidden;
+    localStorage.setItem('chartHiddenStates', JSON.stringify(states));
+    
+    chart.update('none');
+    renderHtmlLegend(chartId); // Cập nhật lại màu chữ/gạch ngang
+    
+    // Đồng bộ sang biểu đồ còn lại
+    const otherChartId = chartId === 1 ? 2 : 1;
+    const otherChart = chartInstances[otherChartId];
+    if (otherChart) {
+        otherChart.data.datasets.forEach((otherDs, idx) => {
+            if (otherDs.label === ds.label) {
+                otherDs.hidden = willBeHidden;
+                otherChart.getDatasetMeta(idx).hidden = willBeHidden;
+            }
+        });
+        otherChart.update('none');
+        renderHtmlLegend(otherChartId);
+    }
+}
+
+// Đóng dropdown khi click ra ngoài
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.chart-legend-dropdown')) {
+        const m1 = document.getElementById('chartLegend1');
+        const m2 = document.getElementById('chartLegend2');
+        if (m1) m1.style.display = 'none';
+        if (m2) m2.style.display = 'none';
+    }
+});
+
+export function onLeftTimeframeChange() {
+    const leftSelect = document.getElementById('chartTimeframe1');
+    const rightSelect = document.getElementById('chartTimeframe2');
+    
+    if (leftSelect && rightSelect) {
+        const leftIdx = TIMEFRAMES.indexOf(leftSelect.value);
+        const rightIdx = TIMEFRAMES.indexOf(rightSelect.value);
+        
+        // Bên phải luôn phải > bên trái
+        if (rightIdx <= leftIdx) {
+            const nextIndex = Math.min(leftIdx + 1, TIMEFRAMES.length - 1);
+            rightSelect.value = TIMEFRAMES[nextIndex];
+            loadChart(2);
+        }
+    }
+    loadChart(1);
+}
+
+export function onRightTimeframeChange() {
+    const leftSelect = document.getElementById('chartTimeframe1');
+    const rightSelect = document.getElementById('chartTimeframe2');
+    
+    if (leftSelect && rightSelect) {
+        const leftIdx = TIMEFRAMES.indexOf(leftSelect.value);
+        const rightIdx = TIMEFRAMES.indexOf(rightSelect.value);
+        
+        // Bên phải không được <= bên trái
+        if (rightIdx <= leftIdx) {
+            alert("Khung thời gian biểu đồ 2 phải LỚN HƠN biểu đồ 1!");
+            // Trả về đúng giá trị hợp lệ lớn hơn 1 bậc
+            rightSelect.value = TIMEFRAMES[Math.min(leftIdx + 1, TIMEFRAMES.length - 1)];
+        }
+    }
+    loadChart(2);
+}
+
+export function onSymbolChange(sourceId) {
+    const sourceSymbol = document.getElementById(`chartSymbol${sourceId}`).value;
+    document.getElementById('chartSymbol1').value = sourceSymbol;
+    document.getElementById('chartSymbol2').value = sourceSymbol;
+    loadChart(1);
+    loadChart(2);
+}
+
+export async function loadChart(chartId = 1) {
+    const symbolInput = document.getElementById(`chartSymbol${chartId}`);
+    const timeframeSelect = document.getElementById(`chartTimeframe${chartId}`);
     
     if (!symbolInput.dataset.initialized) {
-        const savedSymbol = localStorage.getItem('lastChartSymbol');
-        const savedTimeframe = localStorage.getItem('lastChartTimeframe');
+        const savedSymbol = localStorage.getItem(`lastChartSymbol${chartId}`);
+        const savedTimeframe = localStorage.getItem(`lastChartTimeframe${chartId}`);
         if (savedSymbol) symbolInput.value = savedSymbol;
         if (savedTimeframe && timeframeSelect) timeframeSelect.value = savedTimeframe;
         symbolInput.dataset.initialized = 'true';
@@ -39,12 +171,12 @@ export async function loadChart() {
     const symbol = symbolInput.value;
     const timeframe = timeframeSelect ? timeframeSelect.value : '5m';
     
-    localStorage.setItem('lastChartSymbol', symbol);
-    localStorage.setItem('lastChartTimeframe', timeframe);
+    localStorage.setItem(`lastChartSymbol${chartId}`, symbol);
+    localStorage.setItem(`lastChartTimeframe${chartId}`, timeframe);
     
-    const statusLabel = document.getElementById('chartStatusLabel');
+    const statusLabel = document.getElementById(`chartStatusLabel${chartId}`);
     
-    document.getElementById('chartTitle').innerText = `Đang tải ${symbol} (${timeframe})...`;
+    document.getElementById(`chartTitle${chartId}`).innerText = `Đang tải ${symbol} (${timeframe})...`;
     if(statusLabel) {
         statusLabel.innerText = "Đang làm mới...";
         statusLabel.style.color = '#8892a4';
@@ -52,42 +184,42 @@ export async function loadChart() {
     
     try {
         const json = await api.getChartData(symbol, timeframe);
-        document.getElementById('chartTitle').innerText = `Biểu đồ Nến - ${symbol} (${timeframe})`;
-        renderChart(json.data);
+        document.getElementById(`chartTitle${chartId}`).innerText = `Biểu đồ ${chartId} - ${symbol} (${timeframe})`;
+        renderChart(json.data, chartId);
         
-        lastChartUpdateTime = new Date();
+        lastChartUpdateTimes[chartId] = new Date();
         if(statusLabel) {
             statusLabel.innerText = "Đã cập nhật";
             statusLabel.style.color = '#0ecb81';
         }
         
-        startAutoRefresh();
+        startAutoRefresh(chartId);
     } catch(err) {
-        document.getElementById('chartTitle').innerText = `Lỗi tải biểu đồ ${symbol}: ${err.message || err}`;
+        document.getElementById(`chartTitle${chartId}`).innerText = `Lỗi tải biểu đồ ${symbol}: ${err.message || err}`;
         if(statusLabel) {
             statusLabel.innerText = "Lỗi cập nhật";
             statusLabel.style.color = '#f6465d';
         }
-        console.error("loadChart Error:", err);
+        console.error(`loadChart(${chartId}) Error:`, err);
     }
 }
 
-function startAutoRefresh() {
-    if(chartAutoRefreshInterval) clearInterval(chartAutoRefreshInterval);
-    if(chartTimeTrackerInterval) clearInterval(chartTimeTrackerInterval);
+function startAutoRefresh(chartId) {
+    if(chartAutoRefreshIntervals[chartId]) clearInterval(chartAutoRefreshIntervals[chartId]);
+    if(chartTimeTrackerIntervals[chartId]) clearInterval(chartTimeTrackerIntervals[chartId]);
     
     // Auto fetch ngầm mỗi 15 giây
-    chartAutoRefreshInterval = setInterval(() => {
-        silentFetchChart();
+    chartAutoRefreshIntervals[chartId] = setInterval(() => {
+        silentFetchChart(chartId);
     }, 15000);
     
     // Tracking thời gian hiển thị mỗi giây
-    chartTimeTrackerInterval = setInterval(() => {
-        const statusLabel = document.getElementById('chartStatusLabel');
-        if(!statusLabel || !lastChartUpdateTime) return;
+    chartTimeTrackerIntervals[chartId] = setInterval(() => {
+        const statusLabel = document.getElementById(`chartStatusLabel${chartId}`);
+        if(!statusLabel || !lastChartUpdateTimes[chartId]) return;
         if(statusLabel.innerText === "Lỗi cập nhật" || statusLabel.innerText === "Đang làm mới...") return;
         
-        const diffSecs = Math.floor((new Date() - lastChartUpdateTime) / 1000);
+        const diffSecs = Math.floor((new Date() - lastChartUpdateTimes[chartId]) / 1000);
         
         if (diffSecs < 5) {
             statusLabel.innerText = `Vừa cập nhật`;
@@ -99,18 +231,18 @@ function startAutoRefresh() {
     }, 1000);
 }
 
-async function silentFetchChart() {
-    const symbol = document.getElementById('chartSymbol').value;
-    const timeframeSelect = document.getElementById('chartTimeframe');
+async function silentFetchChart(chartId) {
+    const symbol = document.getElementById(`chartSymbol${chartId}`).value;
+    const timeframeSelect = document.getElementById(`chartTimeframe${chartId}`);
     const timeframe = timeframeSelect ? timeframeSelect.value : '5m';
-    const statusLabel = document.getElementById('chartStatusLabel');
+    const statusLabel = document.getElementById(`chartStatusLabel${chartId}`);
     
     try {
         const json = await api.getChartData(symbol, timeframe);
         
-        if (chartInstance) {
+        if (chartInstances[chartId]) {
             const newData = json.data;
-            const datasets = chartInstance.data.datasets;
+            const datasets = chartInstances[chartId].data.datasets;
             
             const smaBasisData = newData.map(d => ({x: d.x, y: d.sma_basis === null ? null : d.sma_basis, momentum: d.sma_momentum}));
             const trendData = newData.map(d => {
@@ -151,12 +283,12 @@ async function silentFetchChart() {
                     ds.backgroundColor = ds.data.map(d => d.y !== null && d.y >= 0 ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)');
                 }
             });
-            chartInstance.update('none'); // Update ngầm
+            chartInstances[chartId].update('none'); // Update ngầm
         } else {
-            renderChart(json.data);
+            renderChart(json.data, chartId);
         }
         
-        lastChartUpdateTime = new Date();
+        lastChartUpdateTimes[chartId] = new Date();
         if(statusLabel) {
             statusLabel.innerText = "Đã cập nhật";
             statusLabel.style.color = '#0ecb81';
@@ -170,8 +302,8 @@ async function silentFetchChart() {
     }
 }
 
-async function handlePanZoom({chart}) {
-    if (isFetchingOlderData) return;
+async function handlePanZoom({chart}, chartId) {
+    if (isFetchingOlderDataMap[chartId]) return;
     
     const priceDataset = chart.data.datasets.find(d => d.label === 'Giá');
     if (!priceDataset || !priceDataset.data.length) return;
@@ -185,24 +317,24 @@ async function handlePanZoom({chart}) {
     // Sát khoảng 5 nến cuối
     const rightThreshold = priceDataset.data[Math.max(0, priceDataset.data.length - 5)];
     if (xAxisMax >= rightThreshold.x) {
-        // Gọi ngầm cập nhật nến mới (không lock isFetchingOlderData vì nó xài chung)
-        silentFetchChart();
+        // Gọi ngầm cập nhật nến mới
+        silentFetchChart(chartId);
     }
     
     // 2. Nếu kéo sát lề trái (cách khoảng 30 nến) thì load thêm quá khứ
     const thresholdCandle = priceDataset.data[Math.min(30, priceDataset.data.length - 1)];
     
     if (xAxisMin < thresholdCandle.x) {
-        isFetchingOlderData = true;
-        const statusLabel = document.getElementById('chartStatusLabel');
+        isFetchingOlderDataMap[chartId] = true;
+        const statusLabel = document.getElementById(`chartStatusLabel${chartId}`);
         if(statusLabel) {
             statusLabel.innerText = "Đang tải dữ liệu quá khứ...";
             statusLabel.style.color = '#8892a4';
         }
         
         try {
-            const symbol = document.getElementById('chartSymbol').value;
-            const timeframeSelect = document.getElementById('chartTimeframe');
+            const symbol = document.getElementById(`chartSymbol${chartId}`).value;
+            const timeframeSelect = document.getElementById(`chartTimeframe${chartId}`);
             const timeframe = timeframeSelect ? timeframeSelect.value : '5m';
             
             const endTime = firstCandle.x - 1;
@@ -252,24 +384,75 @@ async function handlePanZoom({chart}) {
         } catch (e) {
             console.error("Lỗi lấy dữ liệu quá khứ:", e);
         } finally {
-            setTimeout(() => { isFetchingOlderData = false; }, 1000);
+            setTimeout(() => { isFetchingOlderDataMap[chartId] = false; }, 1000);
         }
     }
 }
 
-function renderChart(data) {
-    const ctx = document.getElementById('tradingChart').getContext('2d');
+const TF_MS = {
+    '1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000,
+    '30m': 1800000, '1h': 3600000, '4h': 14400000, '1d': 86400000, '1w': 604800000
+};
+
+let isSyncingZoom = false;
+function syncPanZoom({chart}, sourceChartId) {
+    if (isSyncingZoom) return;
+    const targetChartId = sourceChartId === 1 ? 2 : 1;
+    const targetChart = chartInstances[targetChartId];
+    if (!targetChart) return;
     
-    // Đọc trạng thái ẩn/hiện từ localStorage hoặc chart cũ
+    const sourceTF = document.getElementById(`chartTimeframe${sourceChartId}`).value;
+    const targetTF = document.getElementById(`chartTimeframe${targetChartId}`).value;
+    
+    const sourceMs = TF_MS[sourceTF] || 300000;
+    const targetMs = TF_MS[targetTF] || 900000;
+    const ratio = targetMs / sourceMs;
+    
+    isSyncingZoom = true;
+    
+    const sourceMin = chart.scales.x.min;
+    const sourceMax = chart.scales.x.max;
+    const sourceSpan = sourceMax - sourceMin;
+    
+    const targetSpan = sourceSpan * ratio;
+    
+    // Neo ở cạnh phải để lúc nào nến cuối cùng cũng bằng nhau về mặt thời gian
+    targetChart.options.scales.x.min = sourceMax - targetSpan;
+    targetChart.options.scales.x.max = sourceMax;
+    targetChart.update('none');
+    
+    // Unlock sau tick
+    setTimeout(() => { isSyncingZoom = false; }, 0);
+}
+
+let isSyncingHover = false;
+
+function renderChart(data, chartId) {
+    const canvas = document.getElementById(`tradingChart${chartId}`);
+    const ctx = canvas.getContext('2d');
+    
+    // Xoá tooltip của biểu đồ kia khi chuột rời khỏi canvas này
+    canvas.onmouseleave = () => {
+        if (isSyncingHover) return;
+        const otherChartId = chartId === 1 ? 2 : 1;
+        const otherCanvas = document.getElementById(`tradingChart${otherChartId}`);
+        if (otherCanvas) {
+            isSyncingHover = true;
+            otherCanvas.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+            setTimeout(() => { isSyncingHover = false; }, 0);
+        }
+    };
+    
+    // Đọc trạng thái ẩn/hiện từ chung một khóa
     let hiddenStates = JSON.parse(localStorage.getItem('chartHiddenStates')) || {};
-    if (chartInstance) {
-        chartInstance.data.datasets.forEach((ds, index) => {
-            const meta = chartInstance.getDatasetMeta(index);
+    if (chartInstances[chartId]) {
+        chartInstances[chartId].data.datasets.forEach((ds, index) => {
+            const meta = chartInstances[chartId].getDatasetMeta(index);
             if (meta && hiddenStates[ds.label] === undefined) {
                 hiddenStates[ds.label] = meta.hidden;
             }
         });
-        chartInstance.destroy();
+        chartInstances[chartId].destroy();
     }
     
     const activeIndicatorsIds = JSON.parse(localStorage.getItem('activeIndicators')) || ['custom_sma', 'custom_macd'];
@@ -501,30 +684,55 @@ function renderChart(data) {
         }
     });
 
-    chartInstance = new Chart(ctx, {
+    chartInstances[chartId] = new Chart(ctx, {
         type: 'candlestick',
         data: { datasets: datasets },
         options: {
             responsive: true, maintainAspectRatio: false, scales: chartScales,
+            interaction: { mode: 'index', intersect: false },
+            onHover: (event, elements, chart) => {
+                if (isSyncingHover) return;
+                
+                const targetChartId = chartId === 1 ? 2 : 1;
+                const targetChart = chartInstances[targetChartId];
+                if (!targetChart || elements.length === 0) return;
+
+                const dataIndex = elements[0].index;
+                if (!chart.data.datasets[0].data[dataIndex]) return;
+                const timestamp = chart.data.datasets[0].data[dataIndex].x;
+
+                const targetCanvas = document.getElementById(`tradingChart${targetChartId}`);
+                if (!targetCanvas) return;
+                
+                const rect = targetCanvas.getBoundingClientRect();
+                const targetX = targetChart.scales.x.getPixelForValue(timestamp);
+                
+                let clientY = event.native ? event.native.clientY : (rect.top + event.y);
+
+                isSyncingHover = true;
+                const mouseEvent = new MouseEvent('mousemove', {
+                    clientX: rect.left + targetX,
+                    clientY: clientY,
+                    bubbles: true
+                });
+                targetCanvas.dispatchEvent(mouseEvent);
+                setTimeout(() => { isSyncingHover = false; }, 0);
+            },
             plugins: {
                 legend: { 
-                    display: true, 
-                    labels: { color: '#333' },
-                    onClick: function(e, legendItem, legend) {
-                        Chart.defaults.plugins.legend.onClick.call(this, e, legendItem, legend);
-                        setTimeout(() => {
-                            let states = {};
-                            legend.chart.data.datasets.forEach((ds, idx) => {
-                                const meta = legend.chart.getDatasetMeta(idx);
-                                if (meta) states[ds.label] = meta.hidden;
-                            });
-                            localStorage.setItem('chartHiddenStates', JSON.stringify(states));
-                        }, 50);
-                    }
+                    display: false 
                 },
                 zoom: { 
-                    pan: { enabled: true, mode: 'x', onPanComplete: handlePanZoom }, 
-                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x', onZoomComplete: handlePanZoom } 
+                    pan: { 
+                        enabled: true, mode: 'x', 
+                        onPan: (ctx) => syncPanZoom(ctx, chartId),
+                        onPanComplete: (ctx) => handlePanZoom(ctx, chartId) 
+                    }, 
+                    zoom: { 
+                        wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x', 
+                        onZoom: (ctx) => syncPanZoom(ctx, chartId),
+                        onZoomComplete: (ctx) => handlePanZoom(ctx, chartId) 
+                    } 
                 }
             }
         },

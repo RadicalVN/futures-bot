@@ -1,7 +1,7 @@
 import { loadDashboard } from './dashboard.js';
 import { fetchBots, createBot, toggleBot, deleteBot } from './bots.js';
 import { loadSettings, createAccount } from './accounts.js';
-import { loadChart, populateSymbolsDatalist, resetChartConfig } from './chart.js';
+import { loadChart, populateSymbolsDatalist, globalReset, globalRefresh, onLeftTimeframeChange, onRightTimeframeChange, onSymbolChange, toggleLegendMenu, toggleDataset } from './chart.js';
 import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignals, openStrategyDetail } from './strategies.js';
 import { renderIndicatorsManagement, toggleIndicator } from './indicators.js';
 
@@ -11,7 +11,13 @@ window.toggleBot = toggleBot;
 window.deleteBot = deleteBot;
 window.createAccount = createAccount;
 window.loadChart = loadChart;
-window.resetChartConfig = resetChartConfig;
+window.globalReset = globalReset;
+window.globalRefresh = globalRefresh;
+window.onLeftTimeframeChange = onLeftTimeframeChange;
+window.onRightTimeframeChange = onRightTimeframeChange;
+window.onSymbolChange = onSymbolChange;
+window.toggleLegendMenu = toggleLegendMenu;
+window.toggleDataset = toggleDataset;
 
 window.addSignal = addSignal;
 window.removeSignal = removeSignal;
@@ -46,6 +52,7 @@ window.showPage = function showPage(pageId) {
 // Init Application
 window.onload = () => {
   populateSymbolsDatalist();
-  loadChart();
+  loadChart(1);
+  loadChart(2);
   loadDashboard();
 };

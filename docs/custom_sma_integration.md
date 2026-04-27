@@ -24,10 +24,17 @@ Tất cả các thành phần trực quan từ TradingView đã được port th
 - **Infinite Lazy-Loading (Kéo thả vô tận)**: Khi người dùng kéo (Pan) biểu đồ về phía lề trái, hệ thống sẽ ngầm gọi API với tham số `endTime` để nối liền (concat) dữ liệu lịch sử vào biểu đồ một cách mượt mà. Kéo sát lề phải sẽ ép buộc làm mới ngay lập tức.
 - **Persist State**: Lưu trữ toàn bộ tuỳ chọn hiển thị (bật/tắt đường chỉ báo), symbol và khung thời gian (timeframe) vào `localStorage`. Việc F5 hay tải lại trang sẽ không làm mất cấu hình đã chỉnh sửa.
 
-## 4. Các Vấn Đề Kỹ Thuật Đã Xử Lý
+## 4. Tính Năng Dual-Chart Synchronization (Đồng bộ Đa Khung Thời Gian)
+Hệ thống đã được nâng cấp lên kiến trúc Multi-Chart (2 biểu đồ song song) cho phép phân tích đa khung thời gian với tính năng đồng bộ chuyên sâu mô phỏng chuẩn TradingView Premium:
+- **Đồng bộ Thao Tác Cơ Bản**: Thay đổi mã (Symbol), Làm mới (Refresh) hoặc Khôi phục Mặc định (Reset) trên bất kỳ biểu đồ nào sẽ lập tức đồng bộ lên biểu đồ còn lại. Khung thời gian bên phải luôn được ràng buộc phải lớn hơn khung bên trái ít nhất 1 bậc.
+- **Đồng bộ Kích Thước Nến (Proportional Pan/Zoom Sync)**: Khi kéo thả (Pan) hoặc thu phóng (Zoom) trên một biểu đồ, biểu đồ kia sẽ tự động thu phóng theo với một tỷ lệ (ratio) chính xác dựa trên sự chênh lệch của khung thời gian (VD: 5m và 15m có tỷ lệ 1:3). Điều này đảm bảo **độ rộng (width) của các cây nến** trên 2 màn hình luôn tương đương nhau (số lượng nến bằng nhau) và mốc thời gian của cạnh phải luôn được neo chặt.
+- **Đồng bộ Thông Số & Tooltip (Ghost Cursor)**: Áp dụng cơ chế giả lập sự kiện chuột ảo (Cross-Dispatching MouseEvents) để đồng bộ hoàn hảo Tooltip và đường gióng (Crosshair). Khi rê chuột ở biểu đồ 1, thông số của cây nến thuộc cùng một mốc thời gian ở biểu đồ 2 sẽ tự động bật lên.
+- **Custom HTML Legend Dropdown**: Tối ưu không gian bằng cách giấu các nút Ẩn/Hiện đường tín hiệu vào một menu Dropdown nhỏ gọn ở góc trên bên trái biểu đồ. Mọi thao tác click ẩn/hiện ở biểu đồ này đều lập tức áp dụng cho cả biểu đồ kia.
+
+## 5. Các Vấn Đề Kỹ Thuật Đã Xử Lý
 - **Lỗi NaN Serialize (500 Internal Server Error)**: Pandas mặc định dùng `NaN` (`np.float64(nan)`) khi một số nến ban đầu chưa đủ dữ liệu tính trung bình. FastAPI mặc định không hỗ trợ serialize `np.nan` sang JSON, gây lỗi crash 500. **Giải pháp**: Xử lý chặn vòng lặp, ép thủ công `NaN` thành `None` (Null trong JSON) bằng `pd.isna()`.
 - **Lỗi đè trục Y giữa các Subchart**: Chart.js có bug hiển thị text đè lấn lên nhau khi gộp 2 trục Y trong cùng một canvas theo cơ chế xếp chồng (Stacking). **Giải pháp**: Chèn script chặn render Text tại đường chỉ ranh giới của trục.
 - **Chuẩn màu Nến Nhật (Candlestick)**: Thư viện `chartjs-chart-financial` có xu hướng ép nến Tăng thành màu Xanh lá đặc ruột. **Giải pháp**: Can thiệp sâu vào `Chart.defaults.elements.candlestick` của thư viện JS, cấu hình nến tăng rỗng ruột (màu trong suốt) với viền đen.
 
-## 5. Tham khảo thêm
+## 6. Tham khảo thêm
 - Mã gốc Pine Script: xem tại `docs/custom_sma_pinescript.md`
