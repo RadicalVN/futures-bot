@@ -12,7 +12,12 @@ from src.database.db import get_db
 from src.database.models import Trade, Signal, Bot
 from sqlalchemy import select
 
-from src.core.telegram_notifier import send_telegram_message
+from src.core.discord_notifier import (
+    send_discord_message,
+    build_entry_embed,
+    build_exit_embed,
+    build_error_embed,
+)
 
 
 class OrderManager:
@@ -103,23 +108,29 @@ class OrderManager:
                 f"✅ Đã mở {signal.signal.upper()} {symbol} | "
                 f"Amount: {plan.amount} | SL: {plan.stop_loss:.4f} | TP: {plan.take_profit:.4f}"
             )
-            
-            # Gửi thông báo Telegram
-            msg = (
-                f"🤖 <b>[Bot #{getattr(self, 'bot_id', '?')}] MỞ LỆNH {signal.signal.upper()}</b>\n"
-                f"🏷 <b>Cặp giao dịch:</b> {symbol}\n"
-                f"💰 <b>Giá vào:</b> {plan.entry_price}\n"
-                f"⚖️ <b>Khối lượng:</b> {plan.amount} (Đòn bẩy: {plan.leverage}x)\n"
-                f"🛑 <b>Stop Loss:</b> {plan.stop_loss:.4f}\n"
-                f"🎯 <b>Take Profit:</b> {plan.take_profit:.4f}\n"
-                f"📝 <b>Lý do:</b> {signal.reason}"
+
+            # Gửi thông báo Discord
+            embed = build_entry_embed(
+                bot_id=getattr(self, 'bot_id', '?'),
+                signal_type=signal.signal,
+                symbol=symbol,
+                entry_price=plan.entry_price,
+                amount=plan.amount,
+                leverage=plan.leverage,
+                stop_loss=plan.stop_loss,
+                take_profit=plan.take_profit,
+                reason=signal.reason,
             )
-            await send_telegram_message(msg)
-            
+            await send_discord_message(embed=embed)
+
             return True
         except Exception as e:
             logger.error(f"Lỗi đặt lệnh {symbol}: {e}")
             await self._save_failed_trade(symbol, side, plan, signal, str(e))
+            # Thông báo lỗi lên Discord
+            await send_discord_message(embed=build_error_embed(
+                bot_id=getattr(self, 'bot_id', '?'), symbol=symbol, error=str(e)
+            ))
             return False
 
     async def _handle_exit(self, signal: StrategySignal, positions: list) -> bool:
@@ -149,20 +160,21 @@ class OrderManager:
             order = await self.exchange.close_position(symbol, pos_side, amount)
             logger.info(f"✅ Đã đóng vị thế {pos_side.upper()} {symbol}")
             await self._update_closed_trade(symbol, order)
-            
-            # Lấy thông tin PnL để report (thường nằm trong order['info']['realizedPnl'] hoặc average)
+
             pnl = order.get("info", {}).get("realizedPnl", "0")
             close_price = order.get("average", signal.price)
-            
-            msg = (
-                f"🔒 <b>[Bot #{getattr(self, 'bot_id', '?')}] ĐÓNG VỊ THẾ {pos_side.upper()}</b>\n"
-                f"🏷 <b>Cặp giao dịch:</b> {symbol}\n"
-                f"💸 <b>Giá đóng:</b> {close_price}\n"
-                f"📝 <b>Lý do:</b> {signal.reason}\n"
-                f"💵 <b>PnL Tạm tính:</b> {pnl} USDT"
+
+            # Thông báo Discord
+            embed = build_exit_embed(
+                bot_id=getattr(self, 'bot_id', '?'),
+                signal_type=signal.signal,
+                symbol=symbol,
+                close_price=close_price,
+                pnl=pnl,
+                reason=signal.reason,
             )
-            await send_telegram_message(msg)
-            
+            await send_discord_message(embed=embed)
+
             return True
         except Exception as e:
             logger.error(f"Lỗi đóng vị thế {symbol}: {e}")
