@@ -14,6 +14,7 @@ class StrategySignal:
     price: float
     reason: str          # Lý do tạo tín hiệu
     confidence: float = 1.0  # 0.0 → 1.0
+    metadata: Optional[dict] = None # Dữ liệu phụ trợ để hiển thị trên biểu đồ (Indicators, Lines, Colors)
 
     @property
     def is_entry(self) -> bool:

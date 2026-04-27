@@ -41,18 +41,87 @@ function renderChart(data) {
     const macdData = data.map(d => ({x: d.x, y: d.macd}));
     const macdSignalData = data.map(d => ({x: d.x, y: d.macd_signal}));
 
+    // Ép màu toàn cục cho nến Nhật
+    if (Chart.defaults && Chart.defaults.elements && Chart.defaults.elements.candlestick) {
+        Chart.defaults.elements.candlestick.backgroundColors = { up: 'rgba(0,0,0,0)', down: '#000000', unchanged: '#000000' };
+        Chart.defaults.elements.candlestick.borderColors = '#000000';
+    }
+
     let datasets = [
         {
             label: 'Giá',
             data: data,
-            color: { up: '#0ecb81', down: '#f6465d', unchanged: '#8892a4' },
+            backgroundColors: { up: 'rgba(0,0,0,0)', down: '#000000', unchanged: '#000000' },
+            borderColors: '#000000',
             yAxisID: 'y'
         }
     ];
 
     if (activeIndicatorsIds.includes('custom_sma')) {
-        datasets.push({ type: 'line', label: 'SMA Up', data: smaUpData, borderColor: '#2196F3', borderWidth: 1.5, pointRadius: 0, yAxisID: 'y' });
-        datasets.push({ type: 'line', label: 'SMA Down', data: smaDnData, borderColor: '#FFEB3B', borderWidth: 1.5, pointRadius: 0, yAxisID: 'y' });
+        const trendData = data.map(d => {
+            let val = null;
+            if (d.sma_trend === 1 && d.sma_up !== 0) val = d.sma_up;
+            else if (d.sma_trend === -1 && d.sma_dn !== 0) val = d.sma_dn;
+            return { x: d.x, y: val, trend: d.sma_trend };
+        });
+        
+        const smaBasisData = data.map(d => ({x: d.x, y: d.sma_basis === null ? null : d.sma_basis, momentum: d.sma_momentum}));
+
+        datasets.push({ 
+            type: 'scatter', 
+            label: 'TVT-Trend', 
+            data: trendData, 
+            backgroundColor: function(context) {
+                const tr = context.raw?.trend;
+                return tr === 1 ? '#2196F3' : (tr === -1 ? '#FFEB3B' : 'transparent');
+            },
+            borderColor: 'transparent',
+            pointStyle: 'circle',
+            pointRadius: 4,
+            borderWidth: 0,
+            yAxisID: 'y' 
+        });
+
+        datasets.push({ 
+            type: 'line', 
+            label: 'TVT-MA', 
+            data: smaBasisData, 
+            spanGaps: true,
+            segment: {
+                borderColor: ctx => {
+                    if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
+                    const curr = ctx.p1.parsed.y;
+                    const prev = ctx.p0.parsed.y;
+                    if (curr > prev) return '#2196F3'; // blue
+                    if (curr < prev) return '#f6465d'; // red
+                    return '#FFEB3B'; // yellow
+                }
+            },
+            borderWidth: 2, 
+            pointRadius: 0, 
+            yAxisID: 'y' 
+        });
+
+        datasets.push({ 
+            type: 'scatter', 
+            label: 'TVT-MA-Cross', 
+            data: smaBasisData, 
+            borderColor: function(context) {
+                const mom = context.raw?.momentum;
+                if (!mom || mom === 'Chưa rõ') return 'transparent';
+                if (mom === 'yellow') return '#FFEB3B';
+                if (mom === 'orange') return '#FF9800';
+                if (mom === 'purple') return '#9C27B0';
+                if (mom === 'blue') return '#2196F3';
+                if (mom === 'red') return '#f6465d';
+                if (mom === 'green') return '#4CAF50';
+                return mom;
+            },
+            pointStyle: 'cross',
+            pointRadius: 4,
+            borderWidth: 2,
+            yAxisID: 'y' 
+        });
     }
 
     if (activeIndicatorsIds.includes('custom_macd')) {
@@ -70,15 +139,32 @@ function renderChart(data) {
     }
 
     let chartScales = {
-        x: { type: 'time', time: { tooltipFormat: 'yyyy-MM-dd HH:mm' }, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8892a4' } },
-        y: { type: 'linear', display: true, position: 'right', grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8892a4' } }
+        x: { type: 'time', time: { tooltipFormat: 'yyyy-MM-dd HH:mm' }, grid: { color: 'rgba(0,0,0,0.1)' }, ticks: { color: '#333' } },
+        y: { 
+            type: 'linear', display: true, position: 'right', grid: { color: 'rgba(0,0,0,0.1)' }, 
+            ticks: { 
+                color: '#333',
+                callback: function(val, index) {
+                    // Ẩn tick thấp nhất để tránh đè lên MACD
+                    return index === 0 ? '' : val;
+                }
+            } 
+        }
     };
 
     if (activeIndicatorsIds.includes('custom_macd')) {
         chartScales.y.stack = 'main';
         chartScales.y.stackWeight = 3;
         chartScales.y_macd = {
-            type: 'linear', display: true, position: 'right', grid: { color: 'rgba(255,255,255,0.05)', drawOnChartArea: true }, ticks: { color: '#8892a4' }, stack: 'main', stackWeight: 1
+            type: 'linear', display: true, position: 'right', grid: { color: 'rgba(0,0,0,0.1)', drawOnChartArea: true }, 
+            ticks: { 
+                color: '#333',
+                callback: function(val, index, ticks) {
+                    // Ẩn tick cao nhất để tránh đè lên Price
+                    return index === ticks.length - 1 ? '' : val;
+                }
+            }, 
+            stack: 'main', stackWeight: 1
         };
     }
 
@@ -101,16 +187,28 @@ function renderChart(data) {
         }
     };
 
+    const customCanvasBackgroundColor = {
+        id: 'customCanvasBackgroundColor',
+        beforeDraw: (chart) => {
+            const ctx = chart.canvas.getContext('2d');
+            ctx.save();
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, chart.width, chart.height);
+            ctx.restore();
+        }
+    };
+
     chartInstance = new Chart(ctx, {
         type: 'candlestick',
         data: { datasets: datasets },
         options: {
             responsive: true, maintainAspectRatio: false, scales: chartScales,
             plugins: {
-                legend: { display: true, labels: { color: '#8892a4' } },
+                legend: { display: true, labels: { color: '#333' } },
                 zoom: { pan: { enabled: true, mode: 'x' }, zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' } }
             }
         },
-        plugins: [splitPanePlugin]
+        plugins: [splitPanePlugin, customCanvasBackgroundColor]
     });
 }

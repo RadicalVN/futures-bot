@@ -49,11 +49,13 @@ async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000)
                 "h": row['high'],
                 "l": row['low'],
                 "c": row['close'],
-                "sma_up": row['custom_sma_up'],
-                "sma_dn": row['custom_sma_dn'],
-                "sma_trend": row['custom_sma_trend'],
-                "macd": row['custom_macd'],
-                "macd_signal": row['custom_macd_signal']
+                "sma_up": None if pd.isna(row.get('custom_sma_up')) else row['custom_sma_up'],
+                "sma_dn": None if pd.isna(row.get('custom_sma_dn')) else row['custom_sma_dn'],
+                "sma_trend": None if pd.isna(row.get('custom_sma_trend')) else row['custom_sma_trend'],
+                "sma_basis": None if pd.isna(row.get('custom_sma_basis')) else row['custom_sma_basis'],
+                "sma_momentum": None if pd.isna(row.get('custom_sma_momentum')) else row['custom_sma_momentum'],
+                "macd": None if pd.isna(row.get('custom_macd')) else row['custom_macd'],
+                "macd_signal": None if pd.isna(row.get('custom_macd_signal')) else row['custom_macd_signal']
             })
         return {"symbol": symbol, "data": formatted_data}
     except Exception as e:

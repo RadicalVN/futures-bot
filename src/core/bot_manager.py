@@ -39,8 +39,9 @@ class BotManager:
                         logger.info(f"Khởi tạo BotEngine cho bot_id={bot.id} ({bot.symbols} - {bot.strategy_name})")
                         
                         engine = BotEngine(
-                            bot_id=bot.id, 
-                            symbols=bot.symbolss, 
+                            bot_id=bot.id,
+                            account_id=bot.account_id,
+                            symbols=bot.symbols, 
                             strategy_name=bot.strategy_name, 
                             parameters=bot.parameters
                         )

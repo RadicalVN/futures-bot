@@ -11,7 +11,7 @@ from src.strategies.ma_macd import MaMacdStrategy
 from src.strategies.custom_sma import CustomSMAStrategy
 from src.strategies.custom_macd import CustomMACDStrategy
 from src.database.db import get_db
-from src.database.models import Bot
+from src.database.models import Bot, ExchangeAccount
 
 class BotEngine:
     """
@@ -19,8 +19,9 @@ class BotEngine:
     Hỗ trợ Market Scanner: quét nhiều symbol cùng lúc.
     """
 
-    def __init__(self, bot_id: int, symbols: list, strategy_name: str, parameters: dict):
+    def __init__(self, bot_id: int, account_id: int, symbols: list, strategy_name: str, parameters: dict):
         self.bot_id = bot_id
+        self.account_id = account_id
         self.symbols_config = symbols or ["BTCUSDT"]
         self.strategy_name = strategy_name
         self.parameters = parameters or {}
@@ -44,8 +45,23 @@ class BotEngine:
     async def initialize(self):
         logger.info(f"Đang khởi tạo BotEngine [ID: {self.bot_id} | {self.symbols_config}]")
 
-        self.exchange = create_exchange_from_env()
-        self.exchange.market_type = self.market_type
+        if self.account_id:
+            async with get_db() as db:
+                acc_result = await db.execute(select(ExchangeAccount).where(ExchangeAccount.id == self.account_id))
+                account = acc_result.scalar_one_or_none()
+                if not account:
+                    raise ValueError(f"Tài khoản API ID={self.account_id} không tồn tại.")
+                
+                self.exchange = BinanceExchange(
+                    api_key=account.api_key,
+                    api_secret=account.api_secret,
+                    mode=account.mode,
+                    market_type=self.market_type
+                )
+        else:
+            self.exchange = create_exchange_from_env()
+            self.exchange.market_type = self.market_type
+            
         await self.exchange.connect()
 
         # Xác định danh sách symbols để quét
@@ -164,18 +180,21 @@ class BotEngine:
 
                 from src.data.indicators import ohlcv_to_dataframe, get_ma_values, get_macd_values
                 df = ohlcv_to_dataframe(ohlcv)
-                ma = get_ma_values(df, self.strategy.ma_fast, self.strategy.ma_slow, self.strategy.ma_type)
-                macd = get_macd_values(df, self.strategy.macd_fast, self.strategy.macd_slow, self.strategy.macd_signal)
-
                 indicator_data = {}
-                if ma:
-                    indicator_data.update({"ma_fast": ma.fast, "ma_slow": ma.slow})
-                if macd:
-                    indicator_data.update({
-                        "macd": macd.macd,
-                        "macd_signal": macd.signal,
-                        "macd_histogram": macd.histogram,
-                    })
+                
+                if hasattr(self.strategy, 'ma_fast') and hasattr(self.strategy, 'ma_slow'):
+                    ma = get_ma_values(df, getattr(self.strategy, 'ma_fast', 10), getattr(self.strategy, 'ma_slow', 50), getattr(self.strategy, 'ma_type', 'ema'))
+                    if ma:
+                        indicator_data.update({"ma_fast": ma.fast, "ma_slow": ma.slow})
+                        
+                if hasattr(self.strategy, 'macd_fast') and hasattr(self.strategy, 'macd_slow'):
+                    macd = get_macd_values(df, getattr(self.strategy, 'macd_fast', 12), getattr(self.strategy, 'macd_slow', 26), getattr(self.strategy, 'macd_signal', 9))
+                    if macd:
+                        indicator_data.update({
+                            "macd": macd.macd,
+                            "macd_signal": macd.signal,
+                            "macd_histogram": macd.histogram,
+                        })
 
                 await self.order_manager.process_signal(signal, indicator_data)
                 
