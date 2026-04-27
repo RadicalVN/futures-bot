@@ -249,6 +249,8 @@ def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, fa
     df['custom_sma_basis'] = basis
     
     momentum_state = np.full(len(df), 'Chưa rõ', dtype=object)
+    slope_pct_arr = np.zeros(len(df))
+    momentum_pct_arr = np.zeros(len(df))
     basis_arr = basis.to_numpy()
     for i in range(2, len(df)):
         if np.isnan(basis_arr[i-2]):
@@ -262,6 +264,9 @@ def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, fa
         diff_prev_to_curr = prev_sma - current_sma
         projected_current_sma = 2 * prev_sma - older_sma
         momentum_diff = current_sma - projected_current_sma
+        
+        slope_pct_arr[i] = ((current_sma - prev_sma) / prev_sma) * 100 if prev_sma != 0 else 0
+        momentum_pct_arr[i] = (momentum_diff / projected_current_sma) * 100 if projected_current_sma != 0 else 0
         
         if momentum_diff == 0:
             momentum_state[i] = "yellow"
@@ -283,6 +288,8 @@ def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, fa
                     momentum_state[i] = "purple"
                     
     df['custom_sma_momentum'] = momentum_state
+    df['custom_sma_slope_pct'] = slope_pct_arr
+    df['custom_sma_momentum_pct'] = momentum_pct_arr
     
     return df
 

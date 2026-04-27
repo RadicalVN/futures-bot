@@ -151,6 +151,12 @@ class CustomSMAStrategy(BaseStrategy):
         upper_bb = basis + dev
         lower_bb = basis - dev
         
+        # Cấu hình ngưỡng lọc nhiễu (mặc định 0 để giữ nguyên logic gốc)
+        min_slope_pct = self.get_param("min_slope_pct", 0.0)
+        min_momentum_pct = self.get_param("min_momentum_pct", 0.0)
+        
+        sma_slope_pct = 0.0
+        momentum_pct = 0.0
         momentum_state = "Chưa rõ"
         if len(basis) >= 3 and not pd.isna(basis.iloc[-3]):
             current_sma = basis.iloc[-1]
@@ -161,11 +167,15 @@ class CustomSMAStrategy(BaseStrategy):
             diff_older_to_prev = older_sma - prev_sma
             diff_prev_to_curr = prev_sma - current_sma
             
+            sma_slope = current_sma - prev_sma
+            sma_slope_pct = (sma_slope / prev_sma) * 100 if prev_sma != 0 else 0
+            
             # Dự phóng giá trị SMA hiện tại theo nội suy tuyến tính (Tương đương sma0Hope)
             projected_current_sma = 2 * prev_sma - older_sma
             
             # Động lượng xu hướng: so sánh thực tế với dự phóng (Tương đương biến trend)
             momentum_diff = current_sma - projected_current_sma
+            momentum_pct = (momentum_diff / projected_current_sma) * 100 if projected_current_sma != 0 else 0
             
             if momentum_diff == 0:
                 momentum_state = "Vàng (Giữ nguyên xu hướng)"
@@ -187,15 +197,21 @@ class CustomSMAStrategy(BaseStrategy):
                         momentum_state = "Tím (Đảo chiều giảm)"
 
         final_signal = "none"
-        reason = f"Chờ tín hiệu | Momentum MA: {momentum_state}"
+        reason = f"Chờ tín hiệu | Momentum MA: {momentum_state} ({momentum_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%"
         
         # Crossover buy/sell signals
         if current_trend == 1 and prev_trend == -1:
-            final_signal = "long"
-            reason = f"Mở LONG: Custom SMA báo Trend Tăng | Momentum MA: {momentum_state}"
+            if sma_slope_pct >= min_slope_pct and momentum_pct >= min_momentum_pct:
+                final_signal = "long"
+                reason = f"Mở LONG: Custom SMA báo Trend Tăng | Momentum MA: {momentum_state} ({momentum_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%"
+            else:
+                reason = f"Bỏ qua LONG: Độ dốc hoặc Gia tốc không đạt ngưỡng | Momentum: {momentum_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%"
         elif current_trend == -1 and prev_trend == 1:
-            final_signal = "short"
-            reason = f"Mở SHORT: Custom SMA báo Trend Giảm | Momentum MA: {momentum_state}"
+            if sma_slope_pct <= -min_slope_pct and momentum_pct <= -min_momentum_pct:
+                final_signal = "short"
+                reason = f"Mở SHORT: Custom SMA báo Trend Giảm | Momentum MA: {momentum_state} ({momentum_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%"
+            else:
+                reason = f"Bỏ qua SHORT: Độ dốc hoặc Gia tốc không đạt ngưỡng | Momentum: {momentum_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%"
 
         current_price = close_prices.iloc[-1]
 
@@ -258,6 +274,10 @@ class CustomSMAStrategy(BaseStrategy):
                 "center_line": float(center_line_arr[-1]) if not pd.isna(center_line_arr[-1]) else None,
                 "band_up": float(band_up_arr[-1]) if not pd.isna(band_up_arr[-1]) else None,
                 "band_dn": float(band_dn_arr[-1]) if not pd.isna(band_dn_arr[-1]) else None
+            },
+            "extra_info": {
+                "slope_pct": round(sma_slope_pct, 4) if 'sma_slope_pct' in locals() else 0.0,
+                "momentum_pct": round(momentum_pct, 4) if 'momentum_pct' in locals() else 0.0
             }
         }
 

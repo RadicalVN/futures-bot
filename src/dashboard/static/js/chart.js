@@ -244,7 +244,13 @@ async function silentFetchChart(chartId) {
             const newData = json.data;
             const datasets = chartInstances[chartId].data.datasets;
             
-            const smaBasisData = newData.map(d => ({x: d.x, y: d.sma_basis === null ? null : d.sma_basis, momentum: d.sma_momentum}));
+            const smaBasisData = newData.map(d => ({
+                x: d.x, 
+                y: d.sma_basis === null ? null : d.sma_basis, 
+                momentum: d.sma_momentum,
+                slope_pct: d.sma_slope_pct,
+                momentum_pct: d.sma_momentum_pct
+            }));
             const trendData = newData.map(d => {
                 let val = null;
                 if (d.sma_trend === 1 && d.sma_up !== 0) val = d.sma_up;
@@ -344,7 +350,13 @@ async function handlePanZoom({chart}, chartId) {
                 const newData = json.data;
                 const datasets = chart.data.datasets;
                 
-                const smaBasisData = newData.map(d => ({x: d.x, y: d.sma_basis === null ? null : d.sma_basis, momentum: d.sma_momentum}));
+                const smaBasisData = newData.map(d => ({
+                    x: d.x, 
+                    y: d.sma_basis === null ? null : d.sma_basis, 
+                    momentum: d.sma_momentum,
+                    slope_pct: d.sma_slope_pct,
+                    momentum_pct: d.sma_momentum_pct
+                }));
                 const trendData = newData.map(d => {
                     let val = null;
                     if (d.sma_trend === 1 && d.sma_up !== 0) val = d.sma_up;
@@ -485,7 +497,13 @@ function renderChart(data, chartId) {
             return { x: d.x, y: val, trend: d.sma_trend };
         });
         
-        const smaBasisData = data.map(d => ({x: d.x, y: d.sma_basis === null ? null : d.sma_basis, momentum: d.sma_momentum}));
+        const smaBasisData = data.map(d => ({
+            x: d.x, 
+            y: d.sma_basis === null ? null : d.sma_basis, 
+            momentum: d.sma_momentum,
+            slope_pct: d.sma_slope_pct,
+            momentum_pct: d.sma_momentum_pct
+        }));
 
         datasets.push({ 
             type: 'scatter', 
@@ -719,6 +737,43 @@ function renderChart(data, chartId) {
                 setTimeout(() => { isSyncingHover = false; }, 0);
             },
             plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            
+                            // Xử lý riêng cho biểu đồ nến (Giá)
+                            if (label === 'Giá') {
+                                const raw = context.raw;
+                                if (raw && raw.c !== undefined) {
+                                    return `Giá: O: ${raw.o.toFixed(2)}  H: ${raw.h.toFixed(2)}  L: ${raw.l.toFixed(2)}  C: ${raw.c.toFixed(2)}`;
+                                }
+                                return label;
+                            }
+                            
+                            if (label) label += ': ';
+                            if (context.parsed.y !== null && context.parsed.y !== undefined && !isNaN(context.parsed.y)) {
+                                label += Number(context.parsed.y).toFixed(4);
+                            } else {
+                                return null; // Ẩn tooltip nếu không có dữ liệu tại điểm này
+                            }
+                            
+                            if (context.dataset.label === 'TVT-MA') {
+                                const slopePct = context.raw?.slope_pct;
+                                if (slopePct !== undefined && slopePct !== null) {
+                                    label += ` (Dốc: ${slopePct > 0 ? '+' : ''}${slopePct.toFixed(4)}%)`;
+                                }
+                            }
+                            if (context.dataset.label === 'TVT-MA-Cross') {
+                                const momPct = context.raw?.momentum_pct;
+                                if (momPct !== undefined && momPct !== null) {
+                                    label += ` (Gia tốc: ${momPct > 0 ? '+' : ''}${momPct.toFixed(4)}%)`;
+                                }
+                            }
+                            return label;
+                        }
+                    }
+                },
                 legend: { 
                     display: false 
                 },

@@ -57,6 +57,8 @@ async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000,
                 "sma_trend": None if pd.isna(row.get('custom_sma_trend')) else row['custom_sma_trend'],
                 "sma_basis": None if pd.isna(row.get('custom_sma_basis')) else row['custom_sma_basis'],
                 "sma_momentum": None if pd.isna(row.get('custom_sma_momentum')) else row['custom_sma_momentum'],
+                "sma_slope_pct": None if pd.isna(row.get('custom_sma_slope_pct')) else row['custom_sma_slope_pct'],
+                "sma_momentum_pct": None if pd.isna(row.get('custom_sma_momentum_pct')) else row['custom_sma_momentum_pct'],
                 "macd": None if pd.isna(row.get('custom_macd')) else row['custom_macd'],
                 "macd_signal": None if pd.isna(row.get('custom_macd_signal')) else row['custom_macd_signal']
             })
