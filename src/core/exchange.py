@@ -39,11 +39,30 @@ class BinanceExchange:
 
         if self.market_type == "futures":
             if self.mode == "testnet":
-                # Binance đã ngừng Testnet Futures — dùng Demo Trading thay thế
-                # Ref: https://t.me/ccxt_announcements/92
-                params["options"]["demoAccount"] = True
+                # Binance Demo Futures endpoint: https://demo-fapi.binance.com
+                # Ref: https://demo.binance.com/en/my/settings/api-management
+                demo_base = "https://demo-fapi.binance.com"
+                params["options"].update({
+                    "recvWindow": 60000,
+                    "adjustForTimeDifference": True,
+                    "fetchMarketsType": "future",  # Chỉ load future markets, không gọi sapi mainnet
+                    "fetchPositionMode": False,     # Bỏ qua check hedge mode khi init
+                })
+                params["urls"] = {
+                    "api": {
+                        "fapiPublic":       f"{demo_base}/fapi/v1",
+                        "fapiPublicV2":     f"{demo_base}/fapi/v2",
+                        "fapiPublicV3":     f"{demo_base}/fapi/v3",
+                        "fapiPrivate":      f"{demo_base}/fapi/v1",
+                        "fapiPrivateV2":    f"{demo_base}/fapi/v2",
+                        "fapiPrivateV3":    f"{demo_base}/fapi/v3",
+                        "fapiData":         f"{demo_base}/futures/data",
+                    }
+                }
                 self._exchange = ccxt.binanceusdm(params)
-                logger.info("🧪 Kết nối Binance DEMO TRADING Futures (tiền ảo)")
+                # Đồng bộ thời gian với server Binance Demo (tránh lệch timestamp)
+                await self._exchange.load_time_difference()
+                logger.info("🧪 Kết nối Binance DEMO TRADING Futures (demo-fapi.binance.com)")
             else:
                 self._exchange = ccxt.binanceusdm(params)
                 logger.info("🔴 Kết nối Binance MAINNET Futures (tiền thật!)")
@@ -56,8 +75,13 @@ class BinanceExchange:
             else:
                 logger.info("🔴 Kết nối Binance MAINNET Spot (tiền thật!)")
 
-        # Load markets
-        await self._exchange.load_markets()
+        # Load markets — Demo mode dùng fetch_markets trực tiếp để tránh ccxt
+        # gọi thêm các endpoint sapi mainnet (không hợp lệ với Demo API key)
+        if self.market_type == "futures" and self.mode == "testnet":
+            markets = await self._exchange.fetch_markets()
+            self._exchange.set_markets(markets)
+        else:
+            await self._exchange.load_markets()
         logger.info(f"✅ Đã kết nối thành công — Market: {self.market_type.upper()}")
 
     async def close(self):
