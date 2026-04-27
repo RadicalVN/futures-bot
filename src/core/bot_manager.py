@@ -52,6 +52,12 @@ class BotManager:
                             asyncio.create_task(engine.start())
                         except Exception as e:
                             logger.error(f"Lỗi khởi tạo bot_id={bot.id}: {e}")
+                            # Đóng kết nối exchange nếu đã tạo (tránh Unclosed session)
+                            if engine.exchange:
+                                try:
+                                    await engine.exchange.close()
+                                except Exception:
+                                    pass
                             bot.status = "error"
                             await db.commit()
                         
