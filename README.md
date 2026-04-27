@@ -6,6 +6,7 @@ Một Trading Bot tự động chuyên giao dịch trên sàn Binance (USDT-M Pe
 - **Cốt lõi:** Sử dụng thư viện ccxt mạnh mẽ, tối ưu hóa cho Async.
 - **Chiến lược (Strategy):** Phân tích tín hiệu giao cắt MA (Fast/Slow) và Momentum của MACD.
 - **Quản lý rủi ro:** Stop Loss, Take Profit và định tuyến khối lượng (Position Sizing).
+- **Kiến trúc Tiên tiến:** Backend thiết kế theo chuẩn FastAPI Routers + Pydantic. Frontend chia nhỏ theo chuẩn ES6 Modules.
 - **Web Dashboard:** Giao diện trực quan (FastAPI + JS), hiển thị số dư, trạng thái vị thế và **biểu đồ Nến Nhật** (Real-time).
 - **1-Click Run:** Cấu hình tự động cài đặt qua start.bat trên Windows.
 - **Containerization:** Sẵn sàng deploy lên VPS với Docker và docker-compose.
