@@ -25,12 +25,15 @@ async def get_symbols():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/chart-data/{symbol:path}")
-async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000):
+async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000, endTime: int = None):
     from src.core.exchange import create_exchange_from_env
     exchange = create_exchange_from_env()
     try:
         await exchange.connect()
-        ohlcv = await exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe, limit)
+        params = {}
+        if endTime:
+            params['endTime'] = endTime
+        ohlcv = await exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe, limit=limit, params=params)
         await exchange.close()
         
         formatted_data = []

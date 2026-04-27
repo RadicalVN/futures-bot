@@ -1,7 +1,7 @@
 import { loadDashboard } from './dashboard.js';
 import { fetchBots, createBot, toggleBot, deleteBot } from './bots.js';
 import { loadSettings, createAccount } from './accounts.js';
-import { loadChart, populateSymbolsDatalist } from './chart.js';
+import { loadChart, populateSymbolsDatalist, resetChartConfig } from './chart.js';
 import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignals, openStrategyDetail } from './strategies.js';
 import { renderIndicatorsManagement, toggleIndicator } from './indicators.js';
 
@@ -11,6 +11,7 @@ window.toggleBot = toggleBot;
 window.deleteBot = deleteBot;
 window.createAccount = createAccount;
 window.loadChart = loadChart;
+window.resetChartConfig = resetChartConfig;
 
 window.addSignal = addSignal;
 window.removeSignal = removeSignal;

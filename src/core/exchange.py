@@ -92,12 +92,13 @@ class BinanceExchange:
 
     # ─── Market Data ───────────────────────────────────────────────────────────
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 200) -> list:
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 200, params: dict = None) -> list:
         """
         Lấy dữ liệu nến OHLCV
         Returns: list of [timestamp, open, high, low, close, volume]
         """
-        ohlcv = await self._exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        params = params or {}
+        ohlcv = await self._exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit, params=params)
         return ohlcv
 
     async def fetch_ticker(self, symbol: str) -> dict:

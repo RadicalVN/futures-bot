@@ -61,12 +61,27 @@
       
       <!-- BIỂU ĐỒ -->
       <div class="card" style="margin-bottom: 20px;">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-            <h3 id="chartTitle">Biểu đồ Nến (Chưa chọn mã)</h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div>
-                <input type="text" id="chartSymbol" class="form-control" list="binanceSymbols" style="width: 150px; display: inline-block; padding: 5px;" placeholder="Tìm mã... (VD: BTCUSDT)" value="BTCUSDT">
+                <h3 id="chartTitle" style="display: inline-block; margin-right: 15px;">Biểu đồ Nến (Chưa chọn mã)</h3>
+                <span id="chartStatusLabel" style="font-size: 13px; color: var(--text-secondary); font-weight: 600;"></span>
+            </div>
+            <div>
+                <select id="chartTimeframe" class="form-control" style="width: 80px; display: inline-block; padding: 5px; margin-right: 5px;" onchange="loadChart()">
+                    <option value="1m">1m</option>
+                    <option value="3m">3m</option>
+                    <option value="5m" selected>5m</option>
+                    <option value="15m">15m</option>
+                    <option value="30m">30m</option>
+                    <option value="1h">1h</option>
+                    <option value="4h">4h</option>
+                    <option value="1d">1D</option>
+                    <option value="1w">1W</option>
+                </select>
+                <input type="text" id="chartSymbol" class="form-control" list="binanceSymbols" style="width: 150px; display: inline-block; padding: 5px;" placeholder="Tìm mã... (VD: BTCUSDT)" value="BTCUSDT" onchange="loadChart()">
                 <datalist id="binanceSymbols"></datalist>
-                <button class="btn btn-primary btn-sm" onclick="loadChart()">Tải Biểu Đồ</button>
+                <button class="btn btn-primary btn-sm" onclick="loadChart()" title="Làm mới ngay lập tức" style="padding: 5px 10px;">🔄</button>
+                <button class="btn btn-sm" onclick="resetChartConfig()" title="Khôi phục mặc định hiển thị" style="padding: 5px 10px; background: var(--bg-panel); color: var(--text-primary); border: 1px solid var(--border);">⚙️ Mặc định</button>
             </div>
         </div>
         <div style="height: 400px; width: 100%;">

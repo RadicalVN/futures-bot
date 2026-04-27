@@ -17,10 +17,17 @@ Tất cả các thành phần trực quan từ TradingView đã được port th
   - `Đỏ` (Tăng gia tốc xuống)
   - `Xanh lá`, `Vàng` (Giảm đà xuống / Sideway)
 
-## 3. Các Vấn Đề Kỹ Thuật Đã Xử Lý
+## 3. Tính năng Trải nghiệm & Tương tác Biểu Đồ (Advanced UI/UX)
+Để mang lại trải nghiệm giống TradingView, hệ thống đã được nâng cấp với các tính năng sau:
+- **Current Price Plugin**: Tự động vẽ một đường đứt nét cắt ngang biểu đồ cùng một nhãn (tag) hình mũi tên hiển thị giá mới nhất, màu sắc tự động đổi (xanh/đỏ) theo nến hiện tại.
+- **Auto-Refresh & Time Tracking**: Tự động làm mới dữ liệu nến định kỳ mỗi 15 giây mà không làm mất trạng thái Zoom/Pan của biểu đồ. Đi kèm là bộ đếm trạng thái làm mới (VD: "Vừa cập nhật", "Cập nhật 15s trước").
+- **Infinite Lazy-Loading (Kéo thả vô tận)**: Khi người dùng kéo (Pan) biểu đồ về phía lề trái, hệ thống sẽ ngầm gọi API với tham số `endTime` để nối liền (concat) dữ liệu lịch sử vào biểu đồ một cách mượt mà. Kéo sát lề phải sẽ ép buộc làm mới ngay lập tức.
+- **Persist State**: Lưu trữ toàn bộ tuỳ chọn hiển thị (bật/tắt đường chỉ báo), symbol và khung thời gian (timeframe) vào `localStorage`. Việc F5 hay tải lại trang sẽ không làm mất cấu hình đã chỉnh sửa.
+
+## 4. Các Vấn Đề Kỹ Thuật Đã Xử Lý
 - **Lỗi NaN Serialize (500 Internal Server Error)**: Pandas mặc định dùng `NaN` (`np.float64(nan)`) khi một số nến ban đầu chưa đủ dữ liệu tính trung bình. FastAPI mặc định không hỗ trợ serialize `np.nan` sang JSON, gây lỗi crash 500. **Giải pháp**: Xử lý chặn vòng lặp, ép thủ công `NaN` thành `None` (Null trong JSON) bằng `pd.isna()`.
 - **Lỗi đè trục Y giữa các Subchart**: Chart.js có bug hiển thị text đè lấn lên nhau khi gộp 2 trục Y trong cùng một canvas theo cơ chế xếp chồng (Stacking). **Giải pháp**: Chèn script chặn render Text tại đường chỉ ranh giới của trục.
 - **Chuẩn màu Nến Nhật (Candlestick)**: Thư viện `chartjs-chart-financial` có xu hướng ép nến Tăng thành màu Xanh lá đặc ruột. **Giải pháp**: Can thiệp sâu vào `Chart.defaults.elements.candlestick` của thư viện JS, cấu hình nến tăng rỗng ruột (màu trong suốt) với viền đen.
 
-## 4. Tham khảo thêm
+## 5. Tham khảo thêm
 - Mã gốc Pine Script: xem tại `docs/custom_sma_pinescript.md`

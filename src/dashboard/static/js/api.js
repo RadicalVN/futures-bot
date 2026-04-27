@@ -11,5 +11,9 @@ export const api = {
     getTrades: (limit=50) => fetch(`/api/trades?limit=${limit}`).then(r => r.json()),
     
     getSymbols: () => fetch('/api/symbols').then(r => r.json()),
-    getChartData: (symbol) => fetch(`/api/chart-data/${symbol.replace("/", "-")}`).then(r => r.json())
+    getChartData: (symbol, timeframe = '5m', endTime = null) => {
+        let url = `/api/chart-data/${symbol.replace("/", "-")}?timeframe=${timeframe}`;
+        if (endTime) url += `&endTime=${endTime}`;
+        return fetch(url).then(r => r.json());
+    }
 };
