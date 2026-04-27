@@ -10,6 +10,9 @@ from src.core.risk_manager import RiskManager
 from src.strategies.ma_macd import MaMacdStrategy
 from src.strategies.custom_sma import CustomSMAStrategy
 from src.strategies.custom_macd import CustomMACDStrategy
+from src.strategies.sma_trend_early_exit import SmaTrendEarlyExitStrategy
+from src.strategies.sma_pullback import SmaPullbackStrategy
+from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount
 
@@ -95,6 +98,12 @@ class BotEngine:
             # Chỉnh lookback lớn hơn để đủ dữ liệu cho MACD signal_length (mặc định 500)
             self.lookback = max(self.lookback, int(self.parameters.get("signal_length", 500)) + 50)
             self.strategy = CustomMACDStrategy(self.parameters)
+        elif self.strategy_name == "sma_trend_early_exit":
+            self.strategy = SmaTrendEarlyExitStrategy(self.parameters)
+        elif self.strategy_name == "sma_pullback":
+            self.strategy = SmaPullbackStrategy(self.parameters)
+        elif self.strategy_name == "sma_anti_sideway":
+            self.strategy = SmaAntiSidewayStrategy(self.parameters)
         else:
             raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")
 
