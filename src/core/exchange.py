@@ -1,6 +1,10 @@
 """
 exchange.py — Binance API Wrapper using ccxt
-Hỗ trợ Futures (USDT-M) và Spot trên cả Testnet và Mainnet
+Hỗ trợ Futures (USDT-M) và Spot trên cả Demo Trading và Mainnet
+
+Lưu ý: Binance đã ngừng sandbox Futures testnet từ 2024.
+Thay thế bằng Demo Trading (demoAccount=True) theo thông báo:
+https://t.me/ccxt_announcements/92
 """
 import os
 import asyncio
@@ -34,16 +38,23 @@ class BinanceExchange:
         }
 
         if self.market_type == "futures":
-            self._exchange = ccxt.binanceusdm(params)
+            if self.mode == "testnet":
+                # Binance đã ngừng Testnet Futures — dùng Demo Trading thay thế
+                # Ref: https://t.me/ccxt_announcements/92
+                params["options"]["demoAccount"] = True
+                self._exchange = ccxt.binanceusdm(params)
+                logger.info("🧪 Kết nối Binance DEMO TRADING Futures (tiền ảo)")
+            else:
+                self._exchange = ccxt.binanceusdm(params)
+                logger.info("🔴 Kết nối Binance MAINNET Futures (tiền thật!)")
         else:
             self._exchange = ccxt.binance(params)
-
-        # Chuyển sang Testnet nếu cần
-        if self.mode == "testnet":
-            self._exchange.set_sandbox_mode(True)
-            logger.info("🧪 Kết nối Binance TESTNET (tiền ảo)")
-        else:
-            logger.info("🔴 Kết nối Binance MAINNET (tiền thật!)")
+            if self.mode == "testnet":
+                # Spot vẫn hỗ trợ sandbox mode bình thường
+                self._exchange.set_sandbox_mode(True)
+                logger.info("🧪 Kết nối Binance TESTNET Spot (tiền ảo)")
+            else:
+                logger.info("🔴 Kết nối Binance MAINNET Spot (tiền thật!)")
 
         # Load markets
         await self._exchange.load_markets()

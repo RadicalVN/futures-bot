@@ -6,18 +6,17 @@ router = APIRouter(prefix="/api", tags=["Market Data"])
 
 @router.get("/symbols")
 async def get_symbols():
-    from src.core.exchange import create_exchange_from_env
-    exchange = create_exchange_from_env()
+    import ccxt.async_support as ccxt
+    exchange = ccxt.binanceusdm({"enableRateLimit": True})
     try:
-        await exchange.connect()
-        markets = exchange._exchange.markets
+        markets = await exchange.load_markets()
         await exchange.close()
-        
+
         symbols = []
         for symbol, market in markets.items():
             if market.get('active') and market.get('quote') == 'USDT' and market.get('contract'):
                 symbols.append(market.get('id', '').upper())
-        
+
         symbols = sorted(list(set(filter(bool, symbols))))
         return {"symbols": symbols}
     except Exception as e:
@@ -26,10 +25,11 @@ async def get_symbols():
 
 @router.get("/chart-data/{symbol:path}")
 async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000, endTime: int = None):
-    from src.core.exchange import create_exchange_from_env
-    exchange = create_exchange_from_env()
+    import ccxt.async_support as ccxt
+    # Dùng public client (không cần API key, không bị ảnh hưởng bởi demoAccount/testnet)
+    exchange = ccxt.binanceusdm({"enableRateLimit": True})
     try:
-        await exchange.connect()
+        await exchange.load_markets()
         params = {}
         if endTime:
             params['endTime'] = endTime
