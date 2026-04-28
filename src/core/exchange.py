@@ -244,13 +244,30 @@ class BinanceExchange:
     async def get_symbol_info(self, symbol: str) -> dict:
         """Lấy thông tin symbol (tick size, lot size, ...)"""
         market = self._exchange.market(symbol)
+
+        def _step_to_decimals(step) -> int:
+            """
+            Chuyển step size sang số chữ số thập phân.
+            ccxt trả về precision dạng step size: 0.001 → 3, 0.01 → 2, 1 → 0, 3 → 0
+            Nếu step >= 1 thì precision = 0 (số nguyên).
+            """
+            if step is None:
+                return 3
+            step = float(step)
+            if step >= 1:
+                return 0
+            # Đếm số chữ số thập phân từ step size
+            import math
+            decimals = max(0, -int(math.floor(math.log10(step))))
+            return decimals
+
         return {
             "symbol": symbol,
             "base": market["base"],
             "quote": market["quote"],
             "min_amount": market["limits"]["amount"]["min"] or 0.0,
-            "amount_precision": int(market["precision"]["amount"]) if market["precision"]["amount"] is not None else 3,
-            "price_precision": int(market["precision"]["price"]) if market["precision"]["price"] is not None else 2,
+            "amount_precision": _step_to_decimals(market["precision"]["amount"]),
+            "price_precision": _step_to_decimals(market["precision"]["price"]),
             "contract_size": market.get("contractSize", 1),
         }
 
