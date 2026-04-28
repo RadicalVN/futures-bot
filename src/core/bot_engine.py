@@ -374,8 +374,8 @@ class BotEngine:
             return
 
         try:
-            from src.core.discord_notifier import send_discord_message, build_candle_status_embed
+            from src.core.discord_notifier import send_discord_message, build_candle_status_embed, DISCORD_REPORT_WEBHOOK_URL
             embed = build_candle_status_embed(candle_time_str, bot_reports)
-            await send_discord_message(embed=embed)
+            await send_discord_message(embed=embed, webhook_url=DISCORD_REPORT_WEBHOOK_URL or None)
         except Exception as e:
             self.log.error(f"Lỗi gửi candle status report: {e}")

@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_REPORT_WEBHOOK_URL = os.getenv("DISCORD_REPORT_WEBHOOK_URL", "")
 
 # Màu embed theo loại lệnh (decimal color code)
 COLORS = {
@@ -37,15 +38,17 @@ SIGNAL_LABELS = {
 }
 
 
-async def send_discord_message(content: str = None, embed: dict = None):
+async def send_discord_message(content: str = None, embed: dict = None, webhook_url: str = None):
     """
     Gửi message văn bản thuần hoặc embed lên Discord Webhook.
 
     Args:
         content: Văn bản thuần (hiển thị phía trên embed).
         embed: Dict theo cấu trúc Discord Embed object.
+        webhook_url: URL webhook cụ thể. Nếu None sẽ dùng DISCORD_WEBHOOK_URL mặc định.
     """
-    if not DISCORD_WEBHOOK_URL:
+    url = webhook_url or DISCORD_WEBHOOK_URL
+    if not url:
         return
 
     payload = {}
@@ -56,14 +59,14 @@ async def send_discord_message(content: str = None, embed: dict = None):
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp:
+            async with session.post(url, json=payload) as resp:
                 if resp.status == 429:
                     # Rate-limited — thử lại sau 1 giây
                     data = await resp.json()
                     wait = data.get("retry_after", 1)
                     logger.warning(f"Discord rate limit, thử lại sau {wait}s")
                     await asyncio.sleep(wait)
-                    async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp2:
+                    async with session.post(url, json=payload) as resp2:
                         if resp2.status not in (200, 204):
                             logger.warning(f"Discord retry thất bại: {resp2.status}")
                 elif resp.status not in (200, 204):
