@@ -20,6 +20,23 @@ from src.database.models import Bot, ExchangeAccount
 
 # ── Candle close detector ─────────────────────────────────────────────────────
 
+def _normalize_symbol(symbol: str) -> str:
+    """
+    Chuẩn hoá symbol về dạng ccxt (BASE/QUOTE).
+    BTCUSDT   → BTC/USDT
+    BTC/USDT  → BTC/USDT  (giữ nguyên)
+    TRUMPUSDT → TRUMP/USDT
+    """
+    if "/" in symbol:
+        return symbol
+    # Các quote currency phổ biến, ưu tiên match dài trước
+    for quote in ("USDT", "BUSD", "BTC", "ETH", "BNB"):
+        if symbol.endswith(quote):
+            base = symbol[: -len(quote)]
+            return f"{base}/{quote}"
+    return symbol  # fallback giữ nguyên
+
+
 def _timeframe_to_seconds(tf: str) -> int:
     """Chuyển timeframe string sang số giây. Ví dụ: '5m' → 300."""
     units = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
@@ -228,7 +245,7 @@ class BotEngine:
 
     async def _analyze_symbol(self, symbol: str, positions: list, open_symbols: list):
         try:
-            trading_symbol = f"{symbol}/USDT" if "/" not in symbol else symbol
+            trading_symbol = _normalize_symbol(symbol)
             ohlcv = await self.exchange.fetch_ohlcv(trading_symbol, self.timeframe, self.lookback)
             if not ohlcv or len(ohlcv) < 50:
                 return
@@ -323,7 +340,7 @@ class BotEngine:
         }
 
         for sym in self.target_symbols:
-            trading_symbol = f"{sym}/USDT" if "/" not in sym else sym
+            trading_symbol = _normalize_symbol(sym)
             signal = self._last_signals.get(trading_symbol)
 
             pos_side = pos_map.get(trading_symbol.replace("/", ""))
