@@ -320,9 +320,13 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
         meta     = r.get("metadata") or {}
         strategy = r.get("strategy_name", "")
         params   = r.get("strategy_params") or {}
+        no_data  = r.get("no_data", False)
 
         # ── Icon header ───────────────────────────────────────────────────────
-        if signal == "long":
+        if no_data and not position:
+            status_icon = "⚠️"
+            header_suffix = f"Thiếu dữ liệu"
+        elif signal == "long":
             status_icon = "🟢"
             header_suffix = "**→ VÀO LONG!**"
         elif signal == "short":
@@ -350,7 +354,11 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
         # ── Build value text ──────────────────────────────────────────────────
         lines = [header_suffix]
 
-        if not meta and not position:
+        if no_data and not position:
+            # Hiển thị lý do thiếu data rõ ràng
+            error_msg = meta.get("error", r.get("reason", "Không rõ"))
+            lines.append(f"```{error_msg[:200]}```")
+        elif not meta and not position:
             lines.append("_Chưa có dữ liệu — chờ chu kỳ quét đầu tiên_")
         else:
             if met:
@@ -380,13 +388,16 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
             "inline": False,
         })
 
-    # Màu embed: xanh nếu có signal entry, vàng nếu có close, tối nếu chờ
+    # Màu embed: xanh nếu có signal entry, vàng nếu có close, cam nếu có lỗi data, tối nếu chờ
     entry_signals = [r for r in bot_reports if r.get("signal") in ("long", "short")]
     close_signals = [r for r in bot_reports if r.get("signal") in ("close_long", "close_short")]
+    data_errors   = [r for r in bot_reports if r.get("no_data") and not r.get("position")]
     if entry_signals:
         color = 0x00C853
     elif close_signals:
         color = 0x546E7A
+    elif data_errors:
+        color = 0xFF6D00  # Cam cảnh báo
     else:
         color = 0x2C2F33
 

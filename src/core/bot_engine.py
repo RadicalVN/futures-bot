@@ -20,6 +20,20 @@ from src.database.models import Bot, ExchangeAccount
 
 # ── Candle close detector ─────────────────────────────────────────────────────
 
+from src.strategies.base_strategy import StrategySignal
+
+
+def _make_no_data_signal(symbol: str, reason: str) -> StrategySignal:
+    """Tạo signal đặc biệt đánh dấu thiếu dữ liệu — phân biệt với signal 'none' bình thường."""
+    return StrategySignal(
+        signal="none",
+        symbol=symbol,
+        price=0,
+        reason=reason,
+        metadata={"no_data": True, "error": reason},
+    )
+
+
 def _normalize_symbol(symbol: str) -> str:
     """
     Chuẩn hoá symbol về dạng ccxt (BASE/QUOTE).
@@ -254,7 +268,15 @@ class BotEngine:
         try:
             trading_symbol = _normalize_symbol(symbol)
             ohlcv = await self.exchange.fetch_ohlcv(trading_symbol, self.timeframe, self.lookback)
-            if not ohlcv or len(ohlcv) < 50:
+
+            # ── Thiếu data OHLCV ──────────────────────────────────────────────
+            if not ohlcv:
+                self.log.warning(f"⚠️ Không lấy được OHLCV cho {trading_symbol}")
+                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, "Không lấy được dữ liệu nến từ exchange")
+                return
+            if len(ohlcv) < 50:
+                self.log.warning(f"⚠️ {trading_symbol}: chỉ có {len(ohlcv)} nến, cần ít nhất 50")
+                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, f"Chỉ có {len(ohlcv)} nến (cần ≥50)")
                 return
 
             signal = await self.strategy.analyze(
@@ -262,6 +284,12 @@ class BotEngine:
                 ohlcv_data=ohlcv,
                 current_positions=positions,
             )
+
+            # ── Strategy báo không đủ dữ liệu tính toán ──────────────────────
+            if signal.signal == "none" and "đủ dữ liệu" in signal.reason.lower():
+                self.log.warning(f"⚠️ {trading_symbol}: {signal.reason} (lookback={self.lookback}, có={len(ohlcv)})")
+                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, signal.reason)
+                return
 
             # Lưu signal cuối cùng để dùng cho status report
             self._last_signals[trading_symbol] = signal
@@ -308,10 +336,7 @@ class BotEngine:
                 ):
                     open_symbols.append(symbol)
             else:
-                # Log debug cho signal "none" — ghi vào file bot nhưng không ra stdout
-                self.log.debug(
-                    f"[none] {trading_symbol} | {signal.reason}"
-                )
+                self.log.debug(f"[none] {trading_symbol} | {signal.reason}")
 
         except Exception as e:
             self.log.error(f"Lỗi quét {symbol}: {e}")
@@ -353,8 +378,8 @@ class BotEngine:
             pos_side = pos_map.get(trading_symbol.replace("/", ""))
 
             if signal:
-                # Bổ sung trend/prev_trend vào metadata nếu chưa có (dùng cho condition report)
                 enriched_meta = dict(signal.metadata or {})
+                no_data = enriched_meta.get("no_data", False)
                 bot_reports.append({
                     "bot_id": self.bot_id,
                     "bot_name": self.bot_name,
@@ -365,6 +390,7 @@ class BotEngine:
                     "position": pos_side,
                     "metadata": enriched_meta,
                     "strategy_params": self.parameters,
+                    "no_data": no_data,
                 })
             else:
                 bot_reports.append({
@@ -377,6 +403,7 @@ class BotEngine:
                     "position": pos_side,
                     "metadata": {},
                     "strategy_params": self.parameters,
+                    "no_data": True,
                 })
 
         if not bot_reports:
