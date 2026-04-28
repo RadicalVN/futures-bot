@@ -77,7 +77,9 @@ class SmaAntiSidewayStrategy(BaseStrategy):
             reason = (f"😴 Ngủ đông (Sideway): |Slope|={abs_slope:.4f}% < {self.sideway_slope_threshold}% | "
                       f"Momentum={current_momentum}")
             return StrategySignal(signal="none", symbol=symbol, price=current_price, reason=reason,
-                                  metadata={"slope_pct": round(slope_pct, 4), "is_sideway": True})
+                                  metadata={"slope_pct": round(slope_pct, 4), "is_sideway": True,
+                                            "trend": int(current_trend), "prev_trend": int(prev_trend),
+                                            "momentum": current_momentum})
 
         reason = (f"Chờ | Trend={current_trend:.0f} | Momentum={current_momentum} | "
                   f"Slope={slope_pct:.4f}% | MomPct={momentum_pct:.4f}%")
@@ -125,5 +127,6 @@ class SmaAntiSidewayStrategy(BaseStrategy):
             price=current_price,
             reason=reason,
             metadata={"slope_pct": round(slope_pct, 4), "momentum_pct": round(momentum_pct, 4),
-                      "momentum": current_momentum, "is_sideway": False}
+                      "momentum": current_momentum, "is_sideway": False,
+                      "trend": int(current_trend), "prev_trend": int(prev_trend)}
         )

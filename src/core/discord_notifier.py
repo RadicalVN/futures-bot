@@ -136,61 +136,202 @@ def build_error_embed(bot_id, symbol: str, error: str) -> dict:
     }
 
 
+def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, position: str) -> tuple[list, list]:
+    """
+    Phân tích điều kiện entry của từng chiến lược.
+    Trả về (conditions_met: list[str], conditions_missing: list[str])
+    """
+    met = []
+    missing = []
+
+    trend = meta.get("trend")          # 1 hoặc -1
+    prev_trend = meta.get("prev_trend")
+    momentum = meta.get("momentum", "")
+    slope_pct = meta.get("slope_pct", 0.0)
+    momentum_pct = meta.get("momentum_pct", 0.0)
+    was_in_pullback = meta.get("was_in_pullback")
+    is_sideway = meta.get("is_sideway")
+
+    STRONG_MOM = {"blue", "purple"}
+    WEAK_MOM   = {"orange", "yellow", "green"}
+
+    # ── Đang giữ vị thế → không cần check entry ──────────────────────────────
+    if position:
+        return [f"Đang giữ {position.upper()}"], []
+
+    # ── sma_trend_early_exit ──────────────────────────────────────────────────
+    if strategy_name == "sma_trend_early_exit":
+        # Trend
+        if trend == 1:
+            met.append("✅ Trend đang TĂNG (1)")
+        elif trend == -1:
+            met.append("✅ Trend đang GIẢM (-1)")
+        else:
+            missing.append("❓ Trend chưa xác định")
+
+        # Trend đảo chiều
+        if prev_trend is not None and trend is not None and trend != prev_trend:
+            met.append("✅ Trend vừa đảo chiều")
+        else:
+            missing.append("⏳ Chờ Trend đảo chiều")
+
+        # Momentum
+        if momentum in STRONG_MOM:
+            met.append(f"✅ Momentum mạnh ({momentum})")
+        else:
+            missing.append(f"❌ Momentum yếu ({momentum}) — cần blue/purple")
+
+        # Slope
+        if abs(slope_pct) > 0:
+            met.append(f"✅ Slope={slope_pct:+.4f}%")
+
+    # ── sma_pullback ──────────────────────────────────────────────────────────
+    elif strategy_name == "sma_pullback":
+        # Trend đang chạy (không cần đảo)
+        if trend == 1:
+            met.append("✅ Trend đang TĂNG (1)")
+        elif trend == -1:
+            met.append("✅ Trend đang GIẢM (-1)")
+        else:
+            missing.append("❓ Trend chưa xác định")
+
+        # Pha pullback
+        if was_in_pullback is True:
+            met.append("✅ Đã qua pha hồi (pullback)")
+        elif was_in_pullback is False:
+            missing.append("⏳ Chờ pha hồi (momentum cần orange/yellow/green)")
+        else:
+            missing.append("❓ Chưa có dữ liệu pullback")
+
+        # Momentum bật lại
+        if momentum in STRONG_MOM:
+            met.append(f"✅ Momentum bật mạnh ({momentum})")
+        elif momentum in WEAK_MOM:
+            missing.append(f"⏳ Momentum đang hồi ({momentum}) — chờ bật blue/purple")
+        else:
+            missing.append(f"❌ Momentum ({momentum}) — cần blue/purple để trigger")
+
+        # Slope
+        if abs(slope_pct) > 0:
+            met.append(f"✅ Slope={slope_pct:+.4f}%")
+
+    # ── sma_anti_sideway ──────────────────────────────────────────────────────
+    elif strategy_name == "sma_anti_sideway":
+        # Bộ lọc sideway
+        if is_sideway is True:
+            missing.append(f"❌ Đang SIDEWAY (|Slope|={abs(slope_pct):.4f}%) — bot ngủ đông")
+        elif is_sideway is False:
+            met.append(f"✅ Không sideway (|Slope|={abs(slope_pct):.4f}%)")
+        else:
+            # Tính từ slope_pct nếu không có is_sideway
+            if abs(slope_pct) >= 0.005:
+                met.append(f"✅ Slope đủ mạnh ({slope_pct:+.4f}%)")
+            else:
+                missing.append(f"❌ Slope quá yếu ({slope_pct:+.4f}%) — thị trường sideway")
+
+        # Trend đảo chiều
+        if prev_trend is not None and trend is not None and trend != prev_trend:
+            met.append("✅ Trend vừa đảo chiều")
+        else:
+            missing.append("⏳ Chờ Trend đảo chiều")
+
+        # Trend hiện tại
+        if trend == 1:
+            met.append("✅ Trend TĂNG (1)")
+        elif trend == -1:
+            met.append("✅ Trend GIẢM (-1)")
+
+        # Momentum pct
+        if abs(momentum_pct) > 0:
+            met.append(f"✅ MomPct={momentum_pct:+.4f}%")
+
+    # ── Fallback cho các chiến lược khác ─────────────────────────────────────
+    else:
+        if trend == 1:
+            met.append("✅ Trend TĂNG")
+        elif trend == -1:
+            met.append("✅ Trend GIẢM")
+        if momentum in STRONG_MOM:
+            met.append(f"✅ Momentum mạnh ({momentum})")
+        else:
+            missing.append(f"⏳ Momentum ({momentum})")
+
+    return met, missing
+
+
 def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict:
     """
     Tạo Discord Embed báo cáo trạng thái tất cả bot sau mỗi nến đóng.
+    Hiển thị rõ điều kiện đã thỏa và còn thiếu để vào lệnh.
 
     bot_reports: list of dict với keys:
         - bot_id, bot_name, symbol, strategy_name
         - signal: "none" | "long" | "short" | "close_long" | "close_short"
         - reason: str (lý do từ strategy)
-        - position: None | "long" | "short"  (vị thế đang giữ)
-        - metadata: dict (slope_pct, momentum, ...)
+        - position: None | "long" | "short"
+        - metadata: dict (slope_pct, momentum, trend, prev_trend, ...)
     """
     fields = []
     has_signal = any(r.get("signal", "none") != "none" for r in bot_reports)
 
     for r in bot_reports:
-        bot_id     = r.get("bot_id", "?")
-        bot_name   = r.get("bot_name", f"Bot#{bot_id}")
-        symbol     = r.get("symbol", "?")
-        signal     = r.get("signal", "none")
-        reason     = r.get("reason", "—")
-        position   = r.get("position")
-        meta       = r.get("metadata") or {}
+        bot_id   = r.get("bot_id", "?")
+        bot_name = r.get("bot_name", f"Bot#{bot_id}")
+        symbol   = r.get("symbol", "?")
+        signal   = r.get("signal", "none")
+        position = r.get("position")
+        meta     = r.get("metadata") or {}
+        strategy = r.get("strategy_name", "")
 
-        # Icon trạng thái
+        # ── Icon header ───────────────────────────────────────────────────────
         if signal == "long":
             status_icon = "🟢"
+            header_suffix = "**→ VÀO LONG!**"
         elif signal == "short":
             status_icon = "🔴"
-        elif signal in ("close_long", "close_short"):
+            header_suffix = "**→ VÀO SHORT!**"
+        elif signal == "close_long":
             status_icon = "🔒"
+            header_suffix = "**→ ĐÓNG LONG**"
+        elif signal == "close_short":
+            status_icon = "🔒"
+            header_suffix = "**→ ĐÓNG SHORT**"
         elif position == "long":
             status_icon = "📈"
+            header_suffix = "Đang giữ LONG"
         elif position == "short":
             status_icon = "📉"
+            header_suffix = "Đang giữ SHORT"
         else:
             status_icon = "⏳"
+            header_suffix = "Đang chờ"
 
-        # Dòng metadata ngắn gọn
-        meta_parts = []
-        if "slope_pct" in meta:
-            meta_parts.append(f"Slope={meta['slope_pct']:+.4f}%")
-        if "momentum" in meta:
-            meta_parts.append(f"Mom={meta['momentum']}")
-        if "momentum_pct" in meta:
-            meta_parts.append(f"MomPct={meta['momentum_pct']:+.4f}%")
-        if "was_in_pullback" in meta:
-            meta_parts.append(f"Pullback={'✅' if meta['was_in_pullback'] else '❌'}")
-        if "is_sideway" in meta:
-            meta_parts.append(f"Sideway={'✅' if meta['is_sideway'] else '❌'}")
-        meta_str = " | ".join(meta_parts) if meta_parts else ""
+        # ── Phân tích điều kiện ───────────────────────────────────────────────
+        met, missing = _analyze_entry_conditions(strategy, signal, meta, position)
 
-        pos_str = f"Đang giữ: **{position.upper()}**" if position else "Không có vị thế"
-        value = f"{pos_str}\n{reason[:200]}"
-        if meta_str:
-            value += f"\n`{meta_str}`"
+        # ── Build value text ──────────────────────────────────────────────────
+        lines = [header_suffix]
+
+        if met:
+            lines.append("**Đã thỏa:**")
+            lines.extend(f"  {c}" for c in met)
+
+        if missing:
+            lines.append("**Còn thiếu:**")
+            lines.extend(f"  {c}" for c in missing)
+
+        # Thêm slope/momentum raw nếu có
+        slope = meta.get("slope_pct")
+        mom   = meta.get("momentum")
+        if slope is not None or mom is not None:
+            raw_parts = []
+            if slope is not None:
+                raw_parts.append(f"Slope={slope:+.4f}%")
+            if mom:
+                raw_parts.append(f"Mom={mom}")
+            lines.append(f"`{' | '.join(raw_parts)}`")
+
+        value = "\n".join(lines)
 
         fields.append({
             "name": f"{status_icon} #{bot_id} {bot_name} — {symbol}",
@@ -198,12 +339,20 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
             "inline": False,
         })
 
-    color = 0x00C853 if has_signal else 0x2C2F33  # Xanh nếu có signal, tối nếu chờ
+    # Màu embed: xanh nếu có signal entry, vàng nếu có close, tối nếu chờ
+    entry_signals = [r for r in bot_reports if r.get("signal") in ("long", "short")]
+    close_signals = [r for r in bot_reports if r.get("signal") in ("close_long", "close_short")]
+    if entry_signals:
+        color = 0x00C853
+    elif close_signals:
+        color = 0x546E7A
+    else:
+        color = 0x2C2F33
 
     return {
         "title": f"📊 Báo cáo nến 5m — {candle_time}",
         "color": color,
-        "fields": fields[:25],  # Discord giới hạn 25 fields
+        "fields": fields[:25],
         "footer": {"text": "Trading Bot — ittuantruong"},
         "timestamp": _utc_now_iso(),
     }

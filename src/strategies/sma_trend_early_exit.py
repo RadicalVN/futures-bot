@@ -110,5 +110,7 @@ class SmaTrendEarlyExitStrategy(BaseStrategy):
             symbol=symbol,
             price=current_price,
             reason=reason,
-            metadata={"slope_pct": round(slope_pct, 4), "momentum_pct": round(momentum_pct, 4), "momentum": current_momentum}
+            metadata={"slope_pct": round(slope_pct, 4), "momentum_pct": round(momentum_pct, 4),
+                      "momentum": current_momentum,
+                      "trend": int(current_trend), "prev_trend": int(prev_trend)}
         )

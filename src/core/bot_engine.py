@@ -346,6 +346,8 @@ class BotEngine:
             pos_side = pos_map.get(trading_symbol.replace("/", ""))
 
             if signal:
+                # Bổ sung trend/prev_trend vào metadata nếu chưa có (dùng cho condition report)
+                enriched_meta = dict(signal.metadata or {})
                 bot_reports.append({
                     "bot_id": self.bot_id,
                     "bot_name": self.bot_name,
@@ -354,7 +356,7 @@ class BotEngine:
                     "signal": signal.signal,
                     "reason": signal.reason,
                     "position": pos_side,
-                    "metadata": signal.metadata or {},
+                    "metadata": enriched_meta,
                 })
             else:
                 bot_reports.append({

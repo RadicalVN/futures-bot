@@ -121,5 +121,6 @@ class SmaPullbackStrategy(BaseStrategy):
             price=current_price,
             reason=reason,
             metadata={"slope_pct": round(slope_pct, 4), "momentum_pct": round(momentum_pct, 4),
-                      "momentum": current_momentum, "was_in_pullback": was_in_pullback}
+                      "momentum": current_momentum, "was_in_pullback": was_in_pullback,
+                      "trend": int(current_trend)}
         )
