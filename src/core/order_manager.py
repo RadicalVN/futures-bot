@@ -214,7 +214,7 @@ class OrderManager:
                 status="filled",
                 signal_type=signal.signal,
                 leverage=plan.leverage,
-                strategy="ma_macd",
+                strategy=self.config.get("strategy_name", "unknown"),
             )
             db.add(trade)
 
@@ -238,7 +238,7 @@ class OrderManager:
                 price=plan.entry_price,
                 status="failed",
                 signal_type=signal.signal,
-                strategy="ma_macd",
+                strategy=self.config.get("strategy_name", "unknown"),
             )
             db.add(trade)
 

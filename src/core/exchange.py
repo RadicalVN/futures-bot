@@ -106,7 +106,16 @@ class BinanceExchange:
         """Lấy danh sách vị thế đang mở (Futures)"""
         if self.market_type != "futures":
             return []
-        positions = await self._exchange.fetch_positions()
+        try:
+            positions = await self._exchange.fetch_positions()
+        except Exception as e:
+            # Demo Trading đôi khi không hỗ trợ /fapi/v3/positionRisk
+            # Thử lại với params type=2 (USDT-M hedge mode off)
+            try:
+                positions = await self._exchange.fetch_positions(params={"type": "2"})
+            except Exception as e2:
+                logger.warning(f"get_positions fallback cũng lỗi: {e2}")
+                return []
         # Chỉ trả về vị thế có size > 0
         open_positions = [
             {

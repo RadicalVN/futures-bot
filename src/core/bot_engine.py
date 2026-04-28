@@ -141,8 +141,12 @@ class BotEngine:
     async def _run_cycle(self):
         try:
             # 1. Lấy vị thế hiện tại để kiểm tra giới hạn Max Open Positions
-            positions = await self.exchange.get_positions()
-            open_position_symbols = [p['symbol'] for p in positions if float(p['contracts']) > 0]
+            try:
+                positions = await self.exchange.get_positions()
+            except Exception as e:
+                logger.warning(f"[Bot {self.bot_id}] Không lấy được positions, bỏ qua chu kỳ này: {e}")
+                return
+            open_position_symbols = [p['symbol'] for p in positions if float(p.get('contracts', p.get('size', 0))) > 0]
             
             # 2. Xử lý chia chunk (đồng thời) để chống nghẽn API
             chunk_size = 5
