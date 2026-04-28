@@ -37,8 +37,12 @@ class OrderManager:
         Xử lý tín hiệu từ strategy
         Returns: True nếu thực thi thành công
         """
-        # Lưu signal vào DB
-        await self._save_signal(signal, indicator_data)
+        # Chỉ lưu signal entry/exit vào DB, bỏ qua "none" để tránh spam
+        if not signal.is_none:
+            try:
+                await self._save_signal(signal, indicator_data)
+            except Exception as e:
+                logger.warning(f"Lỗi lưu signal DB (bỏ qua): {e}")
 
         if signal.is_none:
             return False
@@ -66,16 +70,22 @@ class OrderManager:
         symbol = signal.symbol
         free_balance = balance.get("free", 0)
 
+        logger.info(f"[Entry] {signal.signal.upper()} {symbol} | Số dư: ${free_balance:.2f} USDT | Giá: {signal.price}")
+
         # Kiểm tra giới hạn số vị thế
         if not self.risk.check_max_positions(positions):
-            logger.warning(f"Đã đạt max positions ({self.risk.max_open_positions}), bỏ qua {symbol}")
+            logger.warning(f"[Entry] Đã đạt max positions ({self.risk.max_open_positions}), bỏ qua {symbol}")
+            return False
+
+        if free_balance <= 0:
+            logger.error(f"[Entry] Số dư = 0, không thể đặt lệnh {symbol}")
             return False
 
         # Lấy thông tin symbol
         try:
             symbol_info = await self.exchange.get_symbol_info(symbol)
         except Exception as e:
-            logger.error(f"Không lấy được symbol info {symbol}: {e}")
+            logger.error(f"[Entry] Không lấy được symbol info {symbol}: {e}")
             return False
 
         # Tính kế hoạch lệnh
@@ -90,15 +100,17 @@ class OrderManager:
         )
 
         if plan is None:
-            logger.warning(f"Không thể tạo position plan cho {symbol}")
+            logger.warning(f"[Entry] Không thể tạo position plan cho {symbol} (amount < min hoặc số dư quá nhỏ)")
             return False
+
+        logger.info(f"[Entry] Plan: {side.upper()} {plan.amount} {symbol} @ {plan.entry_price} | Leverage: {plan.leverage}x")
 
         # Đặt leverage và margin mode
         try:
             await self.exchange.set_margin_mode(symbol, self.margin_mode)
             await self.exchange.set_leverage(symbol, plan.leverage)
         except Exception as e:
-            logger.warning(f"Lỗi cài đặt leverage/margin: {e}")
+            logger.warning(f"[Entry] Lỗi cài đặt leverage/margin (tiếp tục): {e}")
 
         # Đặt lệnh thị trường
         try:
