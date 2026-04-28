@@ -42,6 +42,7 @@
     <div class="logo">🚀 Bot Platform</div>
     <div class="nav-item active" onclick="showPage('dashboard')">📊 Tổng quan (Dashboard)</div>
     <div class="nav-item" onclick="showPage('mybots')">🤖 Danh sách Bot</div>
+    <div class="nav-item" onclick="showPage('trades')">📋 Lệnh &amp; PnL</div>
     <div class="nav-item" onclick="showPage('indicators')">📈 Chỉ báo kỹ thuật</div>
     <div class="nav-item" onclick="showPage('strategies')">🎯 Chiến lược giao dịch</div>
     <div class="nav-item" onclick="showPage('settings')">⚙️ Cài đặt</div>
@@ -158,6 +159,105 @@
       </div>
       <div id="botsGrid" class="bot-grid">
         <div class="empty-state">Đang tải dữ liệu...</div>
+      </div>
+    </div>
+
+    <!-- PAGE: TRADES & PNL -->
+    <div id="page-trades" class="page">
+      <h2>📋 Lệnh & Lợi Nhuận (PnL)</h2>
+      
+      <!-- Stats Cards -->
+      <div class="stats-row" id="tradeStatsGrid" style="margin-bottom: 20px;">
+        <div class="empty-state">Đang tải...</div>
+      </div>
+
+      <!-- Vị thế đang mở -->
+      <div class="card" style="margin-bottom: 20px;">
+        <h3>📂 Vị Thế Đang Mở</h3>
+        <div class="table-container" style="margin-top: 15px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Giá vào</th>
+                <th>Số lượng</th>
+                <th>Đòn bẩy</th>
+                <th>Chiến lược</th>
+                <th>Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody id="openTradesBody">
+              <tr><td colspan="8" class="empty-state">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Thống kê từng bot -->
+      <div class="card" style="margin-bottom: 20px;">
+        <h3>📊 Thống Kê Từng Bot</h3>
+        <div class="table-container" style="margin-top: 15px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Bot</th>
+                <th>Chiến lược</th>
+                <th>Symbols</th>
+                <th style="text-align:center;">Đang mở</th>
+                <th style="text-align:center;">Đã đóng</th>
+                <th style="text-align:center;">Win Rate</th>
+                <th style="text-align:right;">PnL</th>
+              </tr>
+            </thead>
+            <tbody id="botStatsTable">
+              <tr><td colspan="7" class="empty-state">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Lịch sử giao dịch -->
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+          <h3>📜 Lịch Sử Giao Dịch</h3>
+          <div style="display: flex; gap: 10px;">
+            <select id="filterBot" class="form-control" style="width: 150px; padding: 5px;">
+              <option value="">Tất cả Bot</option>
+            </select>
+            <select id="filterStatus" class="form-control" style="width: 120px; padding: 5px;">
+              <option value="">Tất cả trạng thái</option>
+              <option value="filled">Đang mở</option>
+              <option value="closed">Đã đóng</option>
+              <option value="failed">Thất bại</option>
+              <option value="canceled">Đã hủy</option>
+            </select>
+            <input type="text" id="filterSymbol" class="form-control" placeholder="Symbol..." style="width: 100px; padding: 5px;">
+            <button class="btn btn-primary btn-sm" onclick="applyTradeFilters()">Lọc</button>
+            <button class="btn btn-sm" onclick="resetTradeFilters()" style="background: var(--bg-panel); color: #fff;">Xóa</button>
+          </div>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Thời gian mở</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Giá</th>
+                <th>Số lượng</th>
+                <th>Đòn bẩy</th>
+                <th>PnL</th>
+                <th>Trạng thái</th>
+                <th>Thời gian đóng</th>
+              </tr>
+            </thead>
+            <tbody id="tradeHistoryBody">
+              <tr><td colspan="9" class="empty-state">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 

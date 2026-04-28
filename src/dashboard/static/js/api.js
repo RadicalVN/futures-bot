@@ -8,7 +8,17 @@ export const api = {
     deleteBot: (id) => fetch(`/api/bots/${id}`, { method: 'DELETE' }),
     
     getEvents: (limit=50) => fetch(`/api/events?limit=${limit}`).then(r => r.json()),
-    getTrades: (limit=50) => fetch(`/api/trades?limit=${limit}`).then(r => r.json()),
+    getTrades: (limit=50, botId=null) => {
+        let url = `/api/trades?limit=${limit}`;
+        if (botId) url += `&bot_id=${botId}`;
+        return fetch(url).then(r => r.json());
+    },
+    getOpenTrades: (botId=null) => {
+        let url = '/api/trades/open';
+        if (botId) url += `?bot_id=${botId}`;
+        return fetch(url).then(r => r.json());
+    },
+    getTradeStats: () => fetch('/api/trades/stats').then(r => r.json()),
     
     getSymbols: () => fetch('/api/symbols').then(r => r.json()),
     getChartData: (symbol, timeframe = '5m', endTime = null) => {

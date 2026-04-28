@@ -59,3 +59,12 @@ body { background: var(--bg-dark); color: var(--text-primary); display: flex; he
 .toast.error { background: #f6465d; }
 .toast.info { background: #4183f4; }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Trade badges */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.badge-long  { background: rgba(14,203,129,0.15); color: #0ecb81; }
+.badge-short { background: rgba(246,70,93,0.15);  color: #f6465d; }
+.badge-close { background: rgba(139,148,158,0.15); color: #8892a4; }
+
+/* Table hover */
+tbody tr:hover { background: rgba(255,255,255,0.03); }

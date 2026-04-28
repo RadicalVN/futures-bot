@@ -178,9 +178,17 @@ class Trade(Base):
             "order_type": self.order_type,
             "amount": self.amount,
             "price": self.price,
+            "avg_price": self.avg_price,
+            "cost": round(self.cost, 4) if self.cost else None,
+            "fee": round(self.fee, 6) if self.fee else 0,
             "status": self.status,
             "realized_pnl": round(self.realized_pnl, 4) if self.realized_pnl else 0,
+            "strategy": self.strategy,
+            "signal_type": self.signal_type,
+            "leverage": self.leverage,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
         }
 
 

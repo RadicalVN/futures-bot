@@ -4,6 +4,7 @@ import { loadSettings, createAccount } from './accounts.js';
 import { loadChart, populateSymbolsDatalist, globalReset, globalRefresh, onLeftTimeframeChange, onRightTimeframeChange, onSymbolChange, toggleLegendMenu, toggleDataset } from './chart.js';
 import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignals, openStrategyDetail } from './strategies.js';
 import { renderIndicatorsManagement, toggleIndicator } from './indicators.js';
+import { loadTradesPage, applyTradeFilters, resetTradeFilters } from './trades.js';
 
 // Expose handlers to window for HTML onclick attributes
 window.createBot = createBot;
@@ -26,6 +27,9 @@ window.openStrategyDetail = openStrategyDetail;
 
 window.toggleIndicator = toggleIndicator;
 
+window.applyTradeFilters = applyTradeFilters;
+window.resetTradeFilters = resetTradeFilters;
+
 // Global Navigation
 window.showPage = function showPage(pageId) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -36,7 +40,7 @@ window.showPage = function showPage(pageId) {
     window.event.currentTarget.classList.add('active');
   } else {
     document.querySelectorAll('.nav-item').forEach(n => {
-      if(n.innerText.toLowerCase().includes(pageId.replace('mybots', 'bot').replace('dashboard', 'tổng quan'))) {
+      if(n.innerText.toLowerCase().includes(pageId.replace('mybots', 'bot').replace('dashboard', 'tổng quan').replace('trades', 'lệnh'))) {
         n.classList.add('active');
       }
     });
@@ -44,6 +48,7 @@ window.showPage = function showPage(pageId) {
   
   if(pageId === 'dashboard') loadDashboard();
   if(pageId === 'mybots') fetchBots();
+  if(pageId === 'trades') loadTradesPage();
   if(pageId === 'settings') loadSettings();
   if(pageId === 'strategies') renderSignalsManagement();
   if(pageId === 'indicators') renderIndicatorsManagement();
