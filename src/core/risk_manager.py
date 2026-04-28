@@ -71,7 +71,7 @@ class RiskManager:
         amount = position_value / (entry_price * contract_size)
         
         # Làm tròn theo precision của exchange
-        amount = round(amount, amount_precision)
+        amount = round(amount, int(amount_precision))
         
         if amount < min_amount:
             logger.warning(

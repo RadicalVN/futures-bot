@@ -248,9 +248,9 @@ class BinanceExchange:
             "symbol": symbol,
             "base": market["base"],
             "quote": market["quote"],
-            "min_amount": market["limits"]["amount"]["min"],
-            "amount_precision": market["precision"]["amount"],
-            "price_precision": market["precision"]["price"],
+            "min_amount": market["limits"]["amount"]["min"] or 0.0,
+            "amount_precision": int(market["precision"]["amount"]) if market["precision"]["amount"] is not None else 3,
+            "price_precision": int(market["precision"]["price"]) if market["precision"]["price"] is not None else 2,
             "contract_size": market.get("contractSize", 1),
         }
 
