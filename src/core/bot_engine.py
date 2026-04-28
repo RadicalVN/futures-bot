@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy import select
@@ -31,6 +32,26 @@ def _make_no_data_signal(symbol: str, reason: str) -> StrategySignal:
         price=0,
         reason=reason,
         metadata={"no_data": True, "error": reason},
+    )
+
+
+def _make_error_signal(symbol: str, error: Exception, context: str = "") -> StrategySignal:
+    """Tạo signal đặc biệt đánh dấu lỗi runtime — kèm traceback đầy đủ."""
+    tb = traceback.format_exc()
+    error_type = type(error).__name__
+    short_msg = f"[{error_type}] {str(error)}"
+    full_msg = f"{context}: {short_msg}" if context else short_msg
+    return StrategySignal(
+        signal="none",
+        symbol=symbol,
+        price=0,
+        reason=full_msg,
+        metadata={
+            "no_data": True,
+            "error": full_msg,
+            "error_type": error_type,
+            "traceback": tb[-1500:],  # Giới hạn để không quá dài
+        },
     )
 
 
@@ -202,7 +223,7 @@ class BotEngine:
         except asyncio.CancelledError:
             self.log.info("Bot bị cancel")
         except Exception as e:
-            self.log.error(f"Lỗi loop bot: {e}")
+            self.log.error(f"❌ Lỗi loop bot: {type(e).__name__}: {e}\n{traceback.format_exc()}")
         finally:
             self.is_running = False
             if self.log:
@@ -260,43 +281,72 @@ class BotEngine:
             await self._maybe_send_candle_report(positions)
 
         except Exception as e:
-            self.log.error(f"Lỗi _run_cycle: {e}")
+            self.log.error(
+                f"❌ Lỗi _run_cycle: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+            )
 
     # ── Symbol analysis ───────────────────────────────────────────────────────
 
     async def _analyze_symbol(self, symbol: str, positions: list, open_symbols: list):
+        trading_symbol = _normalize_symbol(symbol)
         try:
-            trading_symbol = _normalize_symbol(symbol)
-            ohlcv = await self.exchange.fetch_ohlcv(trading_symbol, self.timeframe, self.lookback)
+            # ── Lấy OHLCV ────────────────────────────────────────────────────
+            try:
+                ohlcv = await self.exchange.fetch_ohlcv(trading_symbol, self.timeframe, self.lookback)
+            except Exception as e:
+                self.log.error(f"❌ Lỗi fetch OHLCV {trading_symbol}: {type(e).__name__}: {e}")
+                self._last_signals[trading_symbol] = _make_error_signal(
+                    trading_symbol, e, f"fetch_ohlcv({self.timeframe}, lookback={self.lookback})"
+                )
+                return
 
-            # ── Thiếu data OHLCV ──────────────────────────────────────────────
             if not ohlcv:
-                self.log.warning(f"⚠️ Không lấy được OHLCV cho {trading_symbol}")
-                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, "Không lấy được dữ liệu nến từ exchange")
+                msg = f"Exchange trả về OHLCV rỗng cho {trading_symbol}"
+                self.log.warning(f"⚠️ {msg}")
+                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, msg)
                 return
+
             if len(ohlcv) < 50:
-                self.log.warning(f"⚠️ {trading_symbol}: chỉ có {len(ohlcv)} nến, cần ít nhất 50")
-                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, f"Chỉ có {len(ohlcv)} nến (cần ≥50)")
+                msg = f"Chỉ có {len(ohlcv)} nến (cần ≥50) — lookback={self.lookback}"
+                self.log.warning(f"⚠️ {trading_symbol}: {msg}")
+                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, msg)
                 return
 
-            signal = await self.strategy.analyze(
-                symbol=trading_symbol,
-                ohlcv_data=ohlcv,
-                current_positions=positions,
-            )
+            # ── Chạy strategy ─────────────────────────────────────────────────
+            try:
+                signal = await self.strategy.analyze(
+                    symbol=trading_symbol,
+                    ohlcv_data=ohlcv,
+                    current_positions=positions,
+                )
+            except Exception as e:
+                self.log.error(
+                    f"❌ Lỗi strategy.analyze {trading_symbol}: {type(e).__name__}: {e}\n"
+                    f"{traceback.format_exc()}"
+                )
+                self._last_signals[trading_symbol] = _make_error_signal(
+                    trading_symbol, e, f"strategy.analyze [{self.strategy_name}]"
+                )
+                return
 
-            # ── Strategy báo không đủ dữ liệu tính toán ──────────────────────
+            # ── Strategy báo không đủ dữ liệu ────────────────────────────────
             if signal.signal == "none" and "đủ dữ liệu" in signal.reason.lower():
-                self.log.warning(f"⚠️ {trading_symbol}: {signal.reason} (lookback={self.lookback}, có={len(ohlcv)})")
-                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, signal.reason)
+                msg = f"{signal.reason} (lookback={self.lookback}, có={len(ohlcv)})"
+                self.log.warning(f"⚠️ {trading_symbol}: {msg}")
+                self._last_signals[trading_symbol] = _make_no_data_signal(trading_symbol, msg)
                 return
 
-            # Lưu signal cuối cùng để dùng cho status report
+            # Lưu signal bình thường
             self._last_signals[trading_symbol] = signal
 
             if not signal.is_none:
-                ticker = await self.exchange.fetch_ticker(trading_symbol)
-                signal.price = ticker["last"]
+                # ── Lấy giá ticker ────────────────────────────────────────────
+                try:
+                    ticker = await self.exchange.fetch_ticker(trading_symbol)
+                    signal.price = ticker["last"]
+                except Exception as e:
+                    self.log.warning(f"⚠️ Không lấy được ticker {trading_symbol}: {e} — dùng giá OHLCV")
+                    signal.price = ohlcv[-1][4]  # close của nến cuối
 
                 from src.data.indicators import ohlcv_to_dataframe, get_ma_values, get_macd_values
                 df = ohlcv_to_dataframe(ohlcv)
@@ -326,10 +376,16 @@ class BotEngine:
                             "macd_histogram": macd.histogram,
                         })
 
-                self.log.info(
-                    f"Signal [{signal.signal.upper()}] {trading_symbol} | {signal.reason}"
-                )
-                await self.order_manager.process_signal(signal, indicator_data)
+                self.log.info(f"Signal [{signal.signal.upper()}] {trading_symbol} | {signal.reason}")
+
+                # ── Đặt lệnh ─────────────────────────────────────────────────
+                try:
+                    await self.order_manager.process_signal(signal, indicator_data)
+                except Exception as e:
+                    self.log.error(
+                        f"❌ Lỗi process_signal {trading_symbol}: {type(e).__name__}: {e}\n"
+                        f"{traceback.format_exc()}"
+                    )
 
                 if symbol not in open_symbols and (
                     "long" in signal.signal or "short" in signal.signal
@@ -339,7 +395,14 @@ class BotEngine:
                 self.log.debug(f"[none] {trading_symbol} | {signal.reason}")
 
         except Exception as e:
-            self.log.error(f"Lỗi quét {symbol}: {e}")
+            # Catch-all: bất kỳ lỗi nào không được bắt ở trên
+            self.log.error(
+                f"❌ Lỗi không xác định khi quét {trading_symbol}: {type(e).__name__}: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+            self._last_signals[trading_symbol] = _make_error_signal(
+                trading_symbol, e, "unknown error in _analyze_symbol"
+            )
 
     # ── Candle status report ──────────────────────────────────────────────────
 

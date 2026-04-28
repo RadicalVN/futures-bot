@@ -357,7 +357,16 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
         if no_data and not position:
             # Hiển thị lý do thiếu data rõ ràng
             error_msg = meta.get("error", r.get("reason", "Không rõ"))
-            lines.append(f"```{error_msg[:200]}```")
+            tb = meta.get("traceback", "")
+            if tb:
+                # Có traceback → lỗi runtime
+                lines.append(f"**Lỗi:** `{error_msg[:200]}`")
+                # Lấy 3 dòng cuối traceback để hiển thị
+                tb_lines = [l for l in tb.strip().splitlines() if l.strip()]
+                tb_short = "\n".join(tb_lines[-4:]) if len(tb_lines) > 4 else "\n".join(tb_lines)
+                lines.append(f"```\n{tb_short[:500]}\n```")
+            else:
+                lines.append(f"```{error_msg[:300]}```")
         elif not meta and not position:
             lines.append("_Chưa có dữ liệu — chờ chu kỳ quét đầu tiên_")
         else:
