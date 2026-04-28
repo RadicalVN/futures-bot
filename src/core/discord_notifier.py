@@ -144,82 +144,94 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
     """
     Phân tích điều kiện entry của từng chiến lược.
     Trả về (conditions_met: list[str], conditions_missing: list[str])
+    Trả về ([], []) nếu chưa có dữ liệu phân tích.
     """
     met = []
     missing = []
     p = params or {}
 
-    trend = meta.get("trend")
-    prev_trend = meta.get("prev_trend")
-    momentum = meta.get("momentum", "")
-    slope_pct = meta.get("slope_pct", 0.0)
-    momentum_pct = meta.get("momentum_pct", 0.0)
-    was_in_pullback = meta.get("was_in_pullback")
-    is_sideway = meta.get("is_sideway")
-
-    STRONG_MOM = {"blue", "purple"}
-    WEAK_MOM   = {"orange", "yellow", "green"}
-
     # ── Đang giữ vị thế → không cần check entry ──────────────────────────────
     if position:
         return [f"Đang giữ {position.upper()}"], []
+
+    # ── Chưa có dữ liệu → không phân tích ────────────────────────────────────
+    if not meta:
+        return [], []
+
+    trend        = meta.get("trend")
+    prev_trend   = meta.get("prev_trend")
+    momentum     = meta.get("momentum", "")
+    slope_pct    = meta.get("slope_pct", 0.0)
+    momentum_pct = meta.get("momentum_pct", 0.0)
+    was_in_pullback = meta.get("was_in_pullback")
+    is_sideway   = meta.get("is_sideway")
+
+    STRONG_MOM = {"blue", "purple"}
+    WEAK_MOM   = {"orange", "yellow", "green"}
 
     # ── sma_trend_early_exit ──────────────────────────────────────────────────
     if strategy_name == "sma_trend_early_exit":
         min_slope = p.get("min_slope_pct", 0.0)
 
+        # Trend hiện tại
         if trend == 1:
-            met.append("✅ Trend đang TĂNG (1)")
+            met.append("✅ Trend TĂNG (1)")
         elif trend == -1:
-            met.append("✅ Trend đang GIẢM (-1)")
+            met.append("✅ Trend GIẢM (-1)")
         else:
             missing.append("❓ Trend chưa xác định")
 
-        if prev_trend is not None and trend is not None and trend != prev_trend:
-            met.append("✅ Trend vừa đảo chiều")
-        else:
-            missing.append("⏳ Chờ Trend đảo chiều")
+        # Trend đảo chiều — chỉ hiện khi biết prev_trend
+        if prev_trend is not None and trend is not None:
+            if trend != prev_trend:
+                met.append("✅ Trend vừa đảo chiều")
+            else:
+                missing.append(f"⏳ Chờ Trend đảo chiều (hiện: {trend:+.0f} → {trend:+.0f})")
 
+        # Momentum
         if momentum in STRONG_MOM:
             met.append(f"✅ Momentum mạnh ({momentum})")
-        else:
+        elif momentum:
             missing.append(f"❌ Momentum={momentum} — cần blue/purple")
 
+        # Slope (chỉ check nếu có ngưỡng)
         if min_slope > 0:
             if abs(slope_pct) >= min_slope:
-                met.append(f"✅ |Slope|={abs(slope_pct):.4f}% ≥ ngưỡng {min_slope:.4f}%")
+                met.append(f"✅ |Slope|={abs(slope_pct):.4f}% ≥ {min_slope:.4f}%")
             else:
                 missing.append(f"❌ |Slope|={abs(slope_pct):.4f}% < ngưỡng {min_slope:.4f}%")
 
     # ── sma_pullback ──────────────────────────────────────────────────────────
     elif strategy_name == "sma_pullback":
-        min_slope = p.get("min_slope_pct", 0.0)
+        min_slope    = p.get("min_slope_pct", 0.0)
         confirm_bars = p.get("pullback_confirm_bars", 2)
 
+        # Trend
         if trend == 1:
-            met.append("✅ Trend đang TĂNG (1)")
+            met.append("✅ Trend TĂNG (1)")
         elif trend == -1:
-            met.append("✅ Trend đang GIẢM (-1)")
+            met.append("✅ Trend GIẢM (-1)")
         else:
             missing.append("❓ Trend chưa xác định")
 
+        # Pha pullback
         if was_in_pullback is True:
             met.append(f"✅ Đã qua pha hồi ({confirm_bars} nến)")
         elif was_in_pullback is False:
-            missing.append(f"⏳ Chờ pha hồi {confirm_bars} nến liên tiếp (Mom cần orange/yellow/green)")
-        else:
-            missing.append("❓ Chưa có dữ liệu pullback")
+            missing.append(f"⏳ Chờ pha hồi {confirm_bars} nến (Mom cần orange/yellow/green)")
 
+        # Momentum bật lại
         if momentum in STRONG_MOM:
             met.append(f"✅ Momentum bật mạnh ({momentum})")
         elif momentum in WEAK_MOM:
             missing.append(f"⏳ Momentum={momentum} đang hồi — chờ bật blue/purple")
-        else:
+        elif momentum:
             missing.append(f"❌ Momentum={momentum} — cần blue/purple để trigger")
 
+        # Slope
         if min_slope > 0:
             if abs(slope_pct) >= min_slope:
-                met.append(f"✅ |Slope|={abs(slope_pct):.4f}% ≥ ngưỡng {min_slope:.4f}%")
+                met.append(f"✅ |Slope|={abs(slope_pct):.4f}% ≥ {min_slope:.4f}%")
             else:
                 missing.append(f"❌ |Slope|={abs(slope_pct):.4f}% < ngưỡng {min_slope:.4f}%")
 
@@ -228,29 +240,35 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
         sideway_thr = p.get("sideway_slope_threshold", 0.01)
         min_mom_pct = p.get("min_momentum_pct", 0.0)
 
+        # Bộ lọc sideway
         if is_sideway is True:
-            missing.append(f"❌ SIDEWAY: |Slope|={abs(slope_pct):.4f}% < ngưỡng {sideway_thr:.4f}%")
+            missing.append(f"❌ SIDEWAY: |Slope|={abs(slope_pct):.4f}% < {sideway_thr:.4f}%")
         elif is_sideway is False:
             met.append(f"✅ Không sideway: |Slope|={abs(slope_pct):.4f}% ≥ {sideway_thr:.4f}%")
         else:
+            # Tính từ slope_pct nếu không có is_sideway
             if abs(slope_pct) >= sideway_thr:
-                met.append(f"✅ |Slope|={abs(slope_pct):.4f}% ≥ ngưỡng {sideway_thr:.4f}%")
+                met.append(f"✅ |Slope|={abs(slope_pct):.4f}% ≥ {sideway_thr:.4f}%")
             else:
                 missing.append(f"❌ |Slope|={abs(slope_pct):.4f}% < ngưỡng {sideway_thr:.4f}%")
 
-        if prev_trend is not None and trend is not None and trend != prev_trend:
-            met.append("✅ Trend vừa đảo chiều")
-        else:
-            missing.append("⏳ Chờ Trend đảo chiều")
-
+        # Trend hiện tại
         if trend == 1:
             met.append("✅ Trend TĂNG (1)")
         elif trend == -1:
             met.append("✅ Trend GIẢM (-1)")
 
+        # Trend đảo chiều
+        if prev_trend is not None and trend is not None:
+            if trend != prev_trend:
+                met.append("✅ Trend vừa đảo chiều")
+            else:
+                missing.append(f"⏳ Chờ Trend đảo chiều")
+
+        # Momentum pct
         if min_mom_pct > 0:
             if abs(momentum_pct) >= min_mom_pct:
-                met.append(f"✅ |MomPct|={abs(momentum_pct):.4f}% ≥ ngưỡng {min_mom_pct:.4f}%")
+                met.append(f"✅ |MomPct|={abs(momentum_pct):.4f}% ≥ {min_mom_pct:.4f}%")
             else:
                 missing.append(f"❌ |MomPct|={abs(momentum_pct):.4f}% < ngưỡng {min_mom_pct:.4f}%")
 
@@ -262,7 +280,7 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
             met.append("✅ Trend GIẢM")
         if momentum in STRONG_MOM:
             met.append(f"✅ Momentum mạnh ({momentum})")
-        else:
+        elif momentum:
             missing.append(f"⏳ Momentum={momentum} — cần blue/purple")
 
     return met, missing
@@ -322,24 +340,27 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
         # ── Build value text ──────────────────────────────────────────────────
         lines = [header_suffix]
 
-        if met:
-            lines.append("**Đã thỏa:**")
-            lines.extend(f"  {c}" for c in met)
+        if not meta and not position:
+            lines.append("_Chưa có dữ liệu — chờ chu kỳ quét đầu tiên_")
+        else:
+            if met:
+                lines.append("**Đã thỏa:**")
+                lines.extend(f"  {c}" for c in met)
 
-        if missing:
-            lines.append("**Còn thiếu:**")
-            lines.extend(f"  {c}" for c in missing)
+            if missing:
+                lines.append("**Còn thiếu:**")
+                lines.extend(f"  {c}" for c in missing)
 
-        # Thêm slope/momentum raw nếu có
-        slope = meta.get("slope_pct")
-        mom   = meta.get("momentum")
-        if slope is not None or mom is not None:
-            raw_parts = []
-            if slope is not None:
-                raw_parts.append(f"Slope={slope:+.4f}%")
-            if mom:
-                raw_parts.append(f"Mom={mom}")
-            lines.append(f"`{' | '.join(raw_parts)}`")
+            # Raw indicators
+            slope = meta.get("slope_pct")
+            mom   = meta.get("momentum")
+            if slope is not None or mom is not None:
+                raw_parts = []
+                if slope is not None:
+                    raw_parts.append(f"Slope={slope:+.4f}%")
+                if mom:
+                    raw_parts.append(f"Mom={mom}")
+                lines.append(f"`{' | '.join(raw_parts)}`")
 
         value = "\n".join(lines)
 
