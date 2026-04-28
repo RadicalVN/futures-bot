@@ -30,7 +30,7 @@ class BotEngine:
         self.parameters = parameters or {}
 
         # Parse parameters
-        self.timeframe = self.parameters.get("timeframe", "15m")
+        self.timeframe = self.parameters.get("timeframe", "5m")
         self.lookback = self.parameters.get("lookback_candles", 200)
         self.check_interval = self.parameters.get("check_interval_seconds", 60)
         self.market_type = self.parameters.get("market_type", "futures")
