@@ -357,6 +357,7 @@ class BotEngine:
                     "reason": signal.reason,
                     "position": pos_side,
                     "metadata": enriched_meta,
+                    "strategy_params": self.parameters,
                 })
             else:
                 bot_reports.append({
@@ -368,6 +369,7 @@ class BotEngine:
                     "reason": "Chưa có dữ liệu phân tích",
                     "position": pos_side,
                     "metadata": {},
+                    "strategy_params": self.parameters,
                 })
 
         if not bot_reports:
