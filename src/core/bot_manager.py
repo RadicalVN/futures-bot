@@ -43,7 +43,8 @@ class BotManager:
                             account_id=bot.account_id,
                             symbols=bot.symbols, 
                             strategy_name=bot.strategy_name, 
-                            parameters=bot.parameters
+                            parameters=bot.parameters,
+                            bot_name=bot.name,
                         )
                         
                         try:

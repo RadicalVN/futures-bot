@@ -22,12 +22,14 @@ load_dotenv()
 def setup_logging():
     Path("logs").mkdir(exist_ok=True)
     logger.remove()
+    # Stdout: chỉ hiện log không thuộc bot cụ thể (hoặc tất cả — tuỳ chọn)
     logger.add(
         sys.stdout,
         colorize=True,
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
         level="INFO",
     )
+    # File chung: ghi tất cả log (kể cả từ các bot), rotation 50MB
     logger.add(
         "logs/trading.log",
         rotation="50 MB",

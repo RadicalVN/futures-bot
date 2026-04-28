@@ -136,6 +136,79 @@ def build_error_embed(bot_id, symbol: str, error: str) -> dict:
     }
 
 
+def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict:
+    """
+    Tạo Discord Embed báo cáo trạng thái tất cả bot sau mỗi nến đóng.
+
+    bot_reports: list of dict với keys:
+        - bot_id, bot_name, symbol, strategy_name
+        - signal: "none" | "long" | "short" | "close_long" | "close_short"
+        - reason: str (lý do từ strategy)
+        - position: None | "long" | "short"  (vị thế đang giữ)
+        - metadata: dict (slope_pct, momentum, ...)
+    """
+    fields = []
+    has_signal = any(r.get("signal", "none") != "none" for r in bot_reports)
+
+    for r in bot_reports:
+        bot_id     = r.get("bot_id", "?")
+        bot_name   = r.get("bot_name", f"Bot#{bot_id}")
+        symbol     = r.get("symbol", "?")
+        signal     = r.get("signal", "none")
+        reason     = r.get("reason", "—")
+        position   = r.get("position")
+        meta       = r.get("metadata") or {}
+
+        # Icon trạng thái
+        if signal == "long":
+            status_icon = "🟢"
+        elif signal == "short":
+            status_icon = "🔴"
+        elif signal in ("close_long", "close_short"):
+            status_icon = "🔒"
+        elif position == "long":
+            status_icon = "📈"
+        elif position == "short":
+            status_icon = "📉"
+        else:
+            status_icon = "⏳"
+
+        # Dòng metadata ngắn gọn
+        meta_parts = []
+        if "slope_pct" in meta:
+            meta_parts.append(f"Slope={meta['slope_pct']:+.4f}%")
+        if "momentum" in meta:
+            meta_parts.append(f"Mom={meta['momentum']}")
+        if "momentum_pct" in meta:
+            meta_parts.append(f"MomPct={meta['momentum_pct']:+.4f}%")
+        if "was_in_pullback" in meta:
+            meta_parts.append(f"Pullback={'✅' if meta['was_in_pullback'] else '❌'}")
+        if "is_sideway" in meta:
+            meta_parts.append(f"Sideway={'✅' if meta['is_sideway'] else '❌'}")
+        meta_str = " | ".join(meta_parts) if meta_parts else ""
+
+        pos_str = f"Đang giữ: **{position.upper()}**" if position else "Không có vị thế"
+        value = f"{pos_str}\n{reason[:200]}"
+        if meta_str:
+            value += f"\n`{meta_str}`"
+
+        fields.append({
+            "name": f"{status_icon} #{bot_id} {bot_name} — {symbol}",
+            "value": value[:1024],
+            "inline": False,
+        })
+
+    color = 0x00C853 if has_signal else 0x2C2F33  # Xanh nếu có signal, tối nếu chờ
+
+    return {
+        "title": f"📊 Báo cáo nến 5m — {candle_time}",
+        "color": color,
+        "fields": fields[:25],  # Discord giới hạn 25 fields
+        "footer": {"text": "Trading Bot — ittuantruong"},
+        "timestamp": _utc_now_iso(),
+    }
+
+
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
