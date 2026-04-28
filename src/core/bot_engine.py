@@ -9,6 +9,7 @@ from src.core.exchange import BinanceExchange, create_exchange_from_env
 from src.core.order_manager import OrderManager
 from src.core.risk_manager import RiskManager
 from src.core.bot_logger import BotLogger
+from src.core.exit_monitor import ExitMonitor
 from src.strategies.ma_macd import MaMacdStrategy
 from src.strategies.custom_sma import CustomSMAStrategy
 from src.strategies.custom_macd import CustomMACDStrategy
@@ -130,6 +131,9 @@ class BotEngine:
         # Cache signal cuối cùng của mỗi symbol để dùng cho status report
         self._last_signals: dict = {}  # symbol → StrategySignal
 
+        # ExitMonitor — khởi tạo sau initialize()
+        self.exit_monitor: ExitMonitor = None
+
     async def initialize(self):
         # Khởi tạo per-bot logger
         self.log = BotLogger(self.bot_id, self.bot_name)
@@ -209,6 +213,9 @@ class BotEngine:
         self.order_manager.bot_id = self.bot_id
         self.order_manager.strategy_name = self.strategy_name  # truyền đúng tên chiến lược
 
+        # ExitMonitor
+        self.exit_monitor = ExitMonitor(self)
+
         self.log.info(
             f"Sẵn sàng. Quét {len(self.target_symbols)} cặp mỗi {self.check_interval}s "
             f"| Timeframe: {self.timeframe} | Strategy: {self.strategy_name}"
@@ -278,7 +285,11 @@ class BotEngine:
                     await asyncio.gather(*tasks)
                     await asyncio.sleep(0.2)
 
-            # 3. Kiểm tra có nến 5m mới đóng không → gửi status report
+            # 3. Chạy ExitMonitor — kiểm tra điều kiện đóng lệnh và invalidate opportunities
+            if self.exit_monitor:
+                await self.exit_monitor.run_once(positions)
+
+            # 4. Kiểm tra có nến 5m mới đóng không → gửi status report
             await self._maybe_send_candle_report(positions)
 
         except Exception as e:
@@ -418,6 +429,10 @@ class BotEngine:
 
                 self.log.info(f"Signal [{signal.signal.upper()}] {trading_symbol} | {signal.reason}")
 
+                # ── Lưu EntryOpportunity cho mọi signal entry ─────────────────
+                if signal.is_entry:
+                    await self._save_entry_opportunity(signal, effective_max, open_symbols)
+
                 # ── Đặt lệnh — chỉ thực thi nếu chưa đạt giới hạn positions ─
                 is_at_limit = (
                     signal.is_entry
@@ -475,6 +490,49 @@ class BotEngine:
             self._last_signals[trading_symbol] = _make_error_signal(
                 trading_symbol, e, "unknown error in _analyze_symbol"
             )
+
+    async def _save_entry_opportunity(self, signal, effective_max: int, open_symbols: list):
+        """Lưu EntryOpportunity vào DB cho mọi signal entry tìm được."""
+        from src.database.db import get_db
+        from src.database.models import EntryOpportunity
+        from src.core.risk_manager import RiskManager
+
+        sym_clean = signal.symbol.replace("/", "").replace(":USDT", "")
+        executed = sym_clean not in open_symbols and len(open_symbols) < effective_max
+
+        # Tính SL/TP từ risk manager
+        sl, tp = 0.0, 0.0
+        try:
+            sl, tp = self.risk_manager._calculate_sl_tp(
+                signal.price,
+                "buy" if signal.signal == "long" else "sell"
+            )
+        except Exception:
+            pass
+
+        try:
+            async with get_db() as db:
+                opp = EntryOpportunity(
+                    bot_id=self.bot_id,
+                    symbol=signal.symbol,
+                    signal_type=signal.signal,
+                    strategy=self.strategy_name,
+                    entry_price=signal.price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    leverage=self.parameters.get("leverage", 5),
+                    executed=executed,
+                    is_deleted=False,
+                    metadata=dict(signal.metadata or {}),
+                    reason=signal.reason,
+                )
+                db.add(opp)
+            self.log.debug(
+                f"💾 EntryOpportunity saved: {signal.signal.upper()} {signal.symbol} "
+                f"@ {signal.price} | executed={executed}"
+            )
+        except Exception as e:
+            self.log.error(f"❌ Lỗi lưu EntryOpportunity: {e}")
 
     # ── Candle status report ──────────────────────────────────────────────────
 

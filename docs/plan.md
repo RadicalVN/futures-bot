@@ -1,43 +1,39 @@
 # Kế hoạch Triển khai (Implementation Plan)
 
-## Tầm nhìn Hệ thống (System Vision)
-Phát triển từ một **Single Trading Script** thành một **Nền tảng Quản lý Bot (Bot Management Platform)**, cho phép khởi tạo, quản lý và vận hành song song nhiều cấu hình Bot trên các cặp giao dịch và chiến thuật khác nhau.
+## Tầm nhìn Hệ thống
+Phát triển từ **Single Trading Script** thành **Nền tảng Quản lý Bot**, cho phép khởi tạo, quản lý và vận hành song song nhiều bot trên các cặp giao dịch và chiến thuật khác nhau.
 
 ---
 
-## Phase 1: Nền tảng Cơ bản (ĐÃ HOÀN THÀNH)
-- [x] **Core Engine:** ccxt.async_support + asyncio
-- [x] **Dashboard:** FastAPI + uvicorn + WebSockets
-- [x] **Database:** SQLite (với SQLAlchemy ORM)
-- [x] **Frontend:** Vanilla JS, CSS, Chart.js (Candlestick)
-- [x] **Strategy:** MA + MACD
+## Phase 1: Nền tảng Cơ bản ✅ HOÀN THÀNH
+- [x] Core Engine: ccxt.async_support + asyncio
+- [x] Dashboard: FastAPI + uvicorn
+- [x] Database: SQLite + SQLAlchemy ORM
+- [x] Frontend: Vanilla JS, Chart.js Candlestick
+- [x] Strategy: MA + MACD
 
----
+## Phase 2: Multi-Bot Platform ✅ HOÀN THÀNH
+- [x] BotManager: Quản lý lifecycle nhiều BotEngine
+- [x] Database schema: Bot, Trade, Signal, BotEvent, ExchangeAccount
+- [x] Dashboard V2: ES6 Modules, FastAPI Routers, Pydantic
+- [x] Strategy marketplace UI
+- [x] Risk management: Position sizing, SL/TP, trailing stop
+- [x] Custom SMA indicator + 3 chiến lược
+- [x] Per-bot logging (tách file theo ngày)
+- [x] Discord notifications (entry/exit + báo cáo 5m)
 
-## Phase 2: Hệ thống Multi-bot & Marketplace (ĐANG PHÁT TRIỂN)
+## Phase 3: Monitoring & Intelligence ✅ HOÀN THÀNH
+- [x] ExitMonitor: Job quét định kỳ đóng lệnh theo điều kiện chiến lược
+- [x] EntryOpportunity: Lưu tất cả signal entry, track vòng đời với is_deleted
+- [x] Dynamic max_positions theo rủi ro vốn (max_portfolio_risk_pct)
+- [x] Always analyze: Không bỏ qua symbol dù đạt giới hạn position
+- [x] Full traceback logging + error Discord noti
+- [x] Lệnh & PnL tab: Unrealized PnL, bot/strategy columns, timezone +7
+- [x] Report coordinator: Gộp report tránh Discord rate limit
 
-### Mục tiêu
-- Cho phép người dùng cấu hình nhiều bot (ví dụ: Bot A chạy BTCUSDT chiến thuật MA, Bot B chạy ETHUSDT chiến thuật RSI).
-- Cung cấp "Chợ chiến thuật" (Strategy Market) trên UI để chọn.
-- Quản lý tập trung các tiến trình bot chạy ngầm.
-
-### Kiến trúc mới (V2 Architecture)
-1. **Database Schema:**
-   - Tạo mới bảng ots: Quản lý danh sách bot (id, 
-ame, symbol, strategy_name, params JSON, status).
-   - Cập nhật bảng 	rades và positions: Thêm cột ot_id để phân biệt dữ liệu.
-2. **Backend Engine:**
-   - Xây dựng BotManager: Class trung tâm chịu trách nhiệm quản lý lifecycle (Start/Stop) của các tiến trình bot độc lập (đa luồng asyncio).
-   - Tái cấu trúc BotEngine: Đọc cấu hình từ Database thay vì config.yaml.
-3. **Frontend UI:**
-   - Thêm trang **Market**: Danh sách các loại chiến thuật (chi tiết, biểu đồ minh họa).
-   - Thêm trang **Setup Bot**: Form động (dynamic form) để điền thông số tùy theo chiến thuật.
-   - Nâng cấp trang **Dashboard**: Hiển thị lưới danh sách "My Bots" với trạng thái PnL từng con.
-
-### Các bước Triển khai
-1. **Thiết kế Database:** Cập nhật các Model của SQLAlchemy (models.py).
-2. **Refactor Backend:** Tách cấu hình tĩnh ra khỏi config.yaml và đưa vào CSDL. Xây dựng BotManager.
-3. **Thiết kế API:** Cung cấp CRUD API cho việc tạo, cấu hình và xóa Bot.
-4. **Xây dựng UI:** Thêm các màn hình Setup, Market và nâng cấp Dashboard.
-5. **Testing:** Chạy đồng thời 2-3 bot ảo để kiểm tra chống nghẽn mạng Binance.
-
+## Phase 4: Tối ưu & Mở rộng (KẾ HOẠCH)
+- [ ] Backtesting engine
+- [ ] Telegram notifications
+- [ ] Strategy performance analytics
+- [ ] Auto-tune parameters
+- [ ] WebSocket real-time updates cho dashboard

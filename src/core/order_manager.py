@@ -231,6 +231,8 @@ class OrderManager:
                 status="filled",
                 signal_type=signal.signal,
                 leverage=plan.leverage,
+                stop_loss=plan.stop_loss,
+                take_profit=plan.take_profit,
                 strategy=self.strategy_name,
             )
             db.add(trade)

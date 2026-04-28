@@ -1,64 +1,148 @@
 # Tính năng & Bố cục UI - V2 Multi-Bot Platform
 
-Dưới đây là danh sách toàn bộ các tính năng cốt lõi và bố cục giao diện đã được thiết kế và phát triển cho phiên bản V2 (Chuyển đổi từ Single-bot script sang nền tảng Multi-bot quản lý tập trung).
-
----
-
 ## 1. Bố cục Giao diện Web (UI Layout)
-Giao diện được thiết kế theo phong cách tối màu (Dark mode) hiện đại, lấy cảm hứng từ UI của sàn Binance. Gồm 1 Sidebar điều hướng bên trái và vùng Nội dung chính bên phải.
 
 ### Tab 1: 📊 Tổng Quan (Dashboard)
-Hiển thị toàn cảnh tình hình giao dịch:
-- **Thống kê:** Tổng lợi nhuận (PnL), số lượng Bot đang chạy.
-- **Biểu đồ Nến Nhật (TradingView Style):** 
-  - Hiển thị giá và các đường SMA.
-  - Tích hợp **khung hiển thị MACD độc lập** nằm bên dưới (Stacked Scales) với biểu đồ MACD Histogram màu Xanh/Đỏ cực chuẩn xác.
-- **Lịch sử:** Nhật ký hoạt động của hệ thống (Logs) và các lệnh gần nhất.
+- Thống kê: Tổng PnL, số bot đang chạy, win rate
+- Biểu đồ nến nhật đôi (2 chart song song) với Custom SMA + MACD
+- Lịch sử giao dịch gần nhất và nhật ký hệ thống
 
-### Tab 2: 🤖 Quản lý Bot (My Bots)
-Nơi giám sát toàn bộ hoạt động của các Bot.
-- Hiển thị mỗi Bot dưới dạng 1 Thẻ (Card) bao gồm Trạng thái, Symbol, PnL, Tỷ lệ thắng.
-- **Nút hành động:** Bật/Tắt Bot, Xóa Bot (Soft delete).
+### Tab 2: 🤖 Danh Sách Bot
+- Card từng bot: trạng thái, symbol, PnL, win rate
+- Bật/Tắt/Xóa bot (soft delete)
 
-### Tab 3: 🛒 Chiến Lược Giao Dịch (Strategies)
-Nơi cấu hình và khởi tạo các tiến trình Bot mới.
-- Khởi tạo Bot với form động: Tên Bot, Tài khoản API, Chiến Thuật (VD: MA + MACD Trend Following), Symbols, Tham số (JSON).
-- Danh sách các chiến lược có sẵn để lựa chọn.
+### Tab 3: 📋 Lệnh & PnL
+- **Vị thế đang mở:** Unrealized PnL từ exchange, auto-refresh 30s
+- **Thống kê từng bot:** Lệnh mở/đóng, win rate, PnL
+- **Lịch sử giao dịch:** Filter theo bot/status/symbol, cột Bot và Chiến lược
+- Timezone UTC+7, tab restore khi reload
 
-### Tab 4: 📈 Chỉ Báo Kỹ Thuật (Indicators)
-Quản lý các chỉ báo hỗ trợ cho **Biểu đồ Nến**:
-- Cho phép người dùng bật/tắt hiển thị (Toggle Switch) các chỉ báo như Custom SMA, Custom MACD.
-- Thiết kế tách biệt hoàn toàn khái niệm "Chiến lược Bot" (Dùng để trade) và "Chỉ báo biểu đồ" (Dùng để xem).
+### Tab 4: 📈 Chỉ Báo Kỹ Thuật
+- Toggle bật/tắt Custom SMA, Custom MACD trên biểu đồ
 
-### Tab 5: ⚙️ Cài Đặt (Settings)
-Nơi quản lý khóa truy cập API (API Keys).
-- Hỗ trợ lưu trữ nhiều cấu hình API Keys (Multi-accounts).
-- Chọn môi trường giao dịch: `Testnet` hoặc `Mainnet`.
+### Tab 5: 🎯 Chiến Lược Giao Dịch
+- Danh sách chiến lược có sẵn
+- Form khởi tạo bot với tham số JSON
+
+### Tab 6: ⚙️ Cài Đặt
+- Quản lý nhiều API key (testnet/mainnet)
 
 ---
 
-## 2. Tính năng Lõi (Backend & Frontend Architecture)
+## 2. Kiến Trúc Backend
 
-### Cấu Trúc Frontend Tiên Tiến (ES6 Modules)
-- File monolith JavaScript đã được phân mảnh thành các **ES6 Modules** độc lập (`api.js`, `chart.js`, `bots.js`,...).
-- Cô lập các lỗi tiềm ẩn, giúp việc bảo trì hiển thị biểu đồ hay thêm tính năng UI mới trở nên an toàn tuyệt đối.
+### Multi-Bot Engine
+- **BotManager:** Quét DB mỗi 5s, spawn/kill BotEngine theo trạng thái
+- **BotEngine:** Mỗi bot chạy độc lập trong asyncio task
+- **Report Coordinator:** Gộp report 5m của tất cả bot thành 1 Discord message tránh rate limit
 
-### Chuẩn Hóa API (FastAPI RESTful + Routers + Pydantic)
-- Chuyển đổi kiến trúc sang dạng Router (`/routers/bots.py`, `/routers/accounts.py`...).
-- Ứng dụng **Pydantic Schemas (DTO)** để Validation chặt chẽ dữ liệu gửi lên từ giao diện. Báo lỗi 422 ngay nếu cấu trúc JSON không hợp lệ.
-- Tự động sinh Swagger Docs cho API.
+### Per-Bot Logging
+```
+logs/
+├── trading.log                    ← log chung
+└── bot_{id}_{name}/
+    └── YYYY-MM-DD.log             ← log riêng từng bot, rotation theo ngày
+```
 
-### Kiến Trúc Đa Tiến Trình (Multi-Bot Engine)
-- **Bot Manager:** Đóng vai trò là "Tổng Quản Lý". Quét Database mỗi 5 giây để tìm các Bot đang ở trạng thái `running`.
-- **Dynamic Spawn:** Tự động tạo và hủy các luồng `asyncio` biệt lập cho từng Bot mà không ảnh hưởng đến Bot khác. Mọi cấu hình đều được tải từ Database (Không dùng file config cứng).
+### ExitMonitor (mới - v2.5)
+Job chạy song song với mỗi BotEngine, mỗi chu kỳ:
+1. Kiểm tra Trade đang mở → đóng nếu thỏa điều kiện exit
+2. Kiểm tra EntryOpportunity → invalidate nếu cơ hội đã qua
+3. Gửi Discord noti
 
-### Quản Lý Rủi Ro & Đặt Lệnh (Order & Risk Management)
-- Tự động thiết lập Đòn bẩy (Leverage) và Chế độ Margin (Isolated/Cross) theo cấu hình Bot.
-- Tự động tính toán khối lượng lệnh (Position Sizing) tùy theo số dư (Balance) hiện tại.
-- Tự động ngăn chặn việc mở lệnh vượt quá giới hạn vị thế (Max Open Positions).
+Điều kiện exit được check theo thứ tự:
+- SL/TP cứng (stop_loss, take_profit từ khi mở lệnh)
+- Điều kiện chiến lược (trend đảo, momentum suy yếu, sideway...)
 
-### Cơ Sở Dữ Liệu "SaaS-Ready" (SQLite / SQLAlchemy)
-- Bảng `ExchangeAccount`: Quản lý bảo mật nhiều API Keys độc lập.
-- Bảng `Bot`: Lưu cấu hình và tham số vận hành. Hỗ trợ Soft Delete.
-- Bảng `Trade` & `Signal`: Phân bổ lệnh và tín hiệu gắn với `bot_id` riêng biệt. Tự động cộng/trừ PnL vào bảng Bot.
-- Bảng `BotEvent`: Lưu log sự kiện để dễ dàng debug.
+### EntryOpportunity (mới - v2.5)
+Lưu tất cả signal entry tìm được, kể cả khi không vào lệnh:
+```
+entry_opportunities:
+  - bot_id, symbol, signal_type (long/short)
+  - strategy, entry_price, stop_loss, take_profit
+  - executed: True nếu đã vào lệnh thực tế
+  - is_deleted: True nếu điều kiện exit đã xuất hiện
+  - delete_reason: Lý do invalidate
+  - metadata: slope, momentum, trend tại thời điểm tìm thấy
+```
+
+---
+
+## 3. Chiến Lược Giao Dịch
+
+### Custom SMA Indicator
+Chỉ báo tùy chỉnh tính từ SMA nhanh + chậm, làm mượt, tạo dải Bollinger:
+- **Trend:** 1 (tăng) / -1 (giảm)
+- **Momentum:** blue/purple (mạnh) | orange/yellow/green (hồi) | red (giảm mạnh)
+- **Slope %:** Độ dốc của SMA basis
+
+### Chiến Lược 1: `sma_trend_early_exit`
+- **Entry:** Trend vừa đảo chiều + Momentum mạnh (blue/purple)
+- **Exit sớm:** Momentum suy yếu (orange/yellow/green) — không chờ trend đổi màu
+- **Params:** `min_slope_pct`
+
+### Chiến Lược 2: `sma_pullback`
+- **Entry:** Trend đang chạy + N nến hồi (momentum yếu) + Momentum bật mạnh trở lại
+- **Exit:** Trend đảo hoặc momentum mạnh ngược chiều
+- **Params:** `pullback_confirm_bars`, `min_slope_pct`
+
+### Chiến Lược 3: `sma_anti_sideway`
+- **Entry:** Slope đủ mạnh (không sideway) + Trend vừa đảo chiều
+- **Exit:** Slope thu hẹp (về sideway) hoặc trend đảo
+- **Params:** `sideway_slope_threshold`, `exit_slope_threshold`, `min_momentum_pct`
+
+---
+
+## 4. Risk Management
+
+### Position Sizing
+```
+amount = (balance * position_size_pct * leverage) / entry_price
+```
+
+### Dynamic Max Positions (mới - v2.4)
+```
+max_positions = max_portfolio_risk_pct / (position_size_pct * stop_loss_pct)
+```
+Nếu không set `max_portfolio_risk_pct` → dùng `max_open_positions` cố định.
+
+### Tham số Risk (trong bot parameters)
+| Param | Default | Mô tả |
+|-------|---------|-------|
+| `leverage` | 5 | Đòn bẩy |
+| `position_size_pct` | 0.10 | % số dư mỗi lệnh |
+| `stop_loss_pct` | 0.02 | SL 2% |
+| `take_profit_pct` | 0.04 | TP 4% |
+| `margin_mode` | isolated | Chế độ margin |
+| `max_open_positions` | 1 | Giới hạn vị thế cố định |
+| `max_portfolio_risk_pct` | — | Giới hạn rủi ro động (nếu set sẽ override max_open_positions) |
+
+---
+
+## 5. Discord Notifications
+
+### Channels
+- `DISCORD_WEBHOOK_URL`: Entry/exit lệnh thực tế, lỗi đặt lệnh
+- `DISCORD_REPORT_WEBHOOK_URL`: Báo cáo định kỳ mỗi nến 5m, invalidate opportunity
+
+### Loại thông báo
+| Loại | Channel | Mô tả |
+|------|---------|-------|
+| 🟢 MỞ LONG / 🔴 MỞ SHORT | Entry | Vào lệnh thành công |
+| 🔒 ĐÓNG LONG/SHORT | Entry | Đóng lệnh + PnL |
+| ⚠️ Lỗi đặt lệnh | Entry | Lỗi khi đặt lệnh |
+| 📊 Báo cáo nến 5m | Report | Trạng thái tất cả bot, điều kiện đã thỏa/còn thiếu |
+| 🗑️ Cơ hội hết hạn | Report | EntryOpportunity bị invalidate |
+
+---
+
+## 6. Database Schema
+
+```
+ExchangeAccount  ← API keys
+Bot              ← Cấu hình bot (strategy, symbols, parameters)
+Trade            ← Lệnh đã đặt (stop_loss, take_profit, realized_pnl)
+EntryOpportunity ← Tất cả signal entry tìm được (executed, is_deleted)
+Signal           ← Lịch sử tín hiệu indicator
+BotEvent         ← Log sự kiện bot
+```

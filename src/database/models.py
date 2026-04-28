@@ -163,6 +163,8 @@ class Trade(Base):
     strategy = Column(String(50))
     signal_type = Column(String(20))
     leverage = Column(Integer, default=1)
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -190,6 +192,60 @@ class Trade(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
+        }
+
+
+class EntryOpportunity(Base):
+    """
+    Lưu tất cả signal entry tìm được, kể cả khi không vào lệnh do giới hạn position.
+    Job ExitMonitor sẽ quét bảng này để invalidate khi điều kiện exit xuất hiện.
+    """
+    __tablename__ = "entry_opportunities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    bot_id       = Column(Integer, ForeignKey("bots.id", ondelete="CASCADE"), nullable=True)
+    bot          = relationship("Bot")
+
+    symbol       = Column(String(20), nullable=False, index=True)
+    signal_type  = Column(String(10), nullable=False)   # "long" | "short"
+    strategy     = Column(String(50))
+    entry_price  = Column(Float)                        # Giá tại thời điểm tìm thấy
+    stop_loss    = Column(Float)
+    take_profit  = Column(Float)
+    leverage     = Column(Integer, default=1)
+
+    # Trạng thái
+    executed     = Column(Boolean, default=False)       # True = đã vào lệnh thực tế
+    is_deleted   = Column(Boolean, default=False)       # True = đã invalidate (exit condition met)
+    delete_reason = Column(String(200))                 # Lý do invalidate
+
+    # Metadata từ strategy
+    metadata     = Column(JSON, default={})             # slope, momentum, trend, ...
+    reason       = Column(String(500))                  # Lý do signal từ strategy
+
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    invalidated_at = Column(DateTime)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "bot_id": self.bot_id,
+            "bot_name": self.bot.name if self.bot else None,
+            "symbol": self.symbol,
+            "signal_type": self.signal_type,
+            "strategy": self.strategy,
+            "entry_price": self.entry_price,
+            "stop_loss": self.stop_loss,
+            "take_profit": self.take_profit,
+            "leverage": self.leverage,
+            "executed": self.executed,
+            "is_deleted": self.is_deleted,
+            "delete_reason": self.delete_reason,
+            "metadata": self.metadata,
+            "reason": self.reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "invalidated_at": self.invalidated_at.isoformat() if self.invalidated_at else None,
         }
 
 
