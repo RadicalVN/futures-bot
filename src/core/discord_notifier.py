@@ -59,19 +59,29 @@ async def send_discord_message(content: str = None, embed: dict = None, webhook_
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as resp:
-                if resp.status == 429:
-                    # Rate-limited — thử lại sau 1 giây
-                    data = await resp.json()
-                    wait = data.get("retry_after", 1)
-                    logger.warning(f"Discord rate limit, thử lại sau {wait}s")
-                    await asyncio.sleep(wait)
-                    async with session.post(url, json=payload) as resp2:
-                        if resp2.status not in (200, 204):
-                            logger.warning(f"Discord retry thất bại: {resp2.status}")
-                elif resp.status not in (200, 204):
-                    text = await resp.text()
-                    logger.warning(f"Lỗi gửi Discord: {resp.status} — {text}")
+            for attempt in range(3):  # Thử tối đa 3 lần
+                try:
+                    async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 429:
+                            data = await resp.json()
+                            wait = data.get("retry_after", 2)
+                            logger.warning(f"Discord rate limit, thử lại sau {wait}s")
+                            await asyncio.sleep(wait)
+                            continue
+                        elif resp.status in (500, 502, 503, 504):
+                            wait = 2 ** attempt  # 1s, 2s, 4s
+                            logger.warning(f"Discord server error {resp.status}, thử lại sau {wait}s (lần {attempt+1}/3)")
+                            await asyncio.sleep(wait)
+                            continue
+                        elif resp.status not in (200, 204):
+                            text = await resp.text()
+                            logger.warning(f"Lỗi gửi Discord: {resp.status} — {text}")
+                        break  # Thành công hoặc lỗi không retry được
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    wait = 2 ** attempt
+                    logger.warning(f"Discord kết nối lỗi (lần {attempt+1}/3): {e}, thử lại sau {wait}s")
+                    if attempt < 2:
+                        await asyncio.sleep(wait)
     except Exception as e:
         logger.error(f"Lỗi kết nối Discord Webhook: {e}")
 
