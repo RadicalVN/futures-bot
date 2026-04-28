@@ -5,6 +5,20 @@ from sqlalchemy import select
 from src.database.db import get_db
 from src.database.models import Bot
 
+# Global reference để dashboard có thể lấy positions
+_global_bot_manager = None
+
+
+async def _get_global_positions() -> list:
+    """Lấy positions từ engine đầu tiên đang chạy (dùng cho dashboard)."""
+    if _global_bot_manager and _global_bot_manager.engines:
+        engine = next(iter(_global_bot_manager.engines.values()))
+        try:
+            return await engine.exchange.get_positions()
+        except Exception:
+            pass
+    return []
+
 
 def _current_5m_ts() -> int:
     now = int(datetime.now(timezone.utc).timestamp())
@@ -23,6 +37,8 @@ class BotManager:
         self._report_lock = asyncio.Lock()
 
     async def start(self):
+        global _global_bot_manager
+        _global_bot_manager = self
         logger.info("BotManager started. Đang theo dõi danh sách bot trong DB...")
         self.is_running = True
         # Chạy song song: poll bots + gửi report gộp

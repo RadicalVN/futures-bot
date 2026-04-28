@@ -207,6 +207,7 @@ class BotEngine:
             self.exchange, self.risk_manager, self.parameters
         )
         self.order_manager.bot_id = self.bot_id
+        self.order_manager.strategy_name = self.strategy_name  # truyền đúng tên chiến lược
 
         self.log.info(
             f"Sẵn sàng. Quét {len(self.target_symbols)} cặp mỗi {self.check_interval}s "

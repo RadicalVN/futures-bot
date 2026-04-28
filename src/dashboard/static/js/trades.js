@@ -66,6 +66,17 @@ export async function loadTradesPage() {
     _loadTradeHistory(),
     _populateBotFilter(),
   ]);
+
+  // Auto-refresh open trades mỗi 30s để cập nhật unrealized PnL
+  if (!window._tradesRefreshTimer) {
+    window._tradesRefreshTimer = setInterval(() => {
+      const page = document.getElementById('page-trades');
+      if (page && page.classList.contains('active')) {
+        _loadOpenTrades();
+        _loadStats();
+      }
+    }, 30000);
+  }
 }
 
 // ── Stats cards ───────────────────────────────────────────────────────────────
@@ -145,7 +156,11 @@ async function _loadOpenTrades() {
     return;
   }
 
-  tbody.innerHTML = trades.map(t => `
+  tbody.innerHTML = trades.map(t => {
+    const upnl = t.unrealized_pnl != null
+      ? fmtPnl(t.unrealized_pnl) + (t.unrealized_pct != null ? ` <span style="color:#8892a4;font-size:11px;">(${t.unrealized_pct > 0 ? '+' : ''}${t.unrealized_pct}%)</span>` : '')
+      : '<span style="color:#8892a4;">—</span>';
+    return `
     <tr>
       <td style="color:#8892a4;font-size:12px;">${fmtTime(t.created_at)}</td>
       <td><strong>${t.symbol}</strong></td>
@@ -155,9 +170,10 @@ async function _loadOpenTrades() {
       <td>${t.leverage ? t.leverage + 'x' : '—'}</td>
       <td style="color:#8892a4;font-size:12px;">${t.bot_name || `Bot#${t.bot_id||'?'}`}</td>
       <td style="color:#8892a4;font-size:12px;">${t.strategy || '—'}</td>
+      <td>${upnl}</td>
       <td>${statusBadge(t.status)}</td>
     </tr>
-  `).join('');
+  `}).join('');
 }
 
 // ── Trade history ─────────────────────────────────────────────────────────────

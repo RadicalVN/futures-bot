@@ -31,6 +31,8 @@ class OrderManager:
         self.config = config
         self.leverage = config.get("leverage", 5)
         self.margin_mode = config.get("margin_mode", "isolated")
+        # strategy_name lấy từ bot_engine khi khởi tạo
+        self.strategy_name: str = "unknown"
 
     async def process_signal(self, signal: StrategySignal, indicator_data: dict = None) -> bool:
         """
@@ -226,7 +228,7 @@ class OrderManager:
                 status="filled",
                 signal_type=signal.signal,
                 leverage=plan.leverage,
-                strategy=self.config.get("strategy_name", "unknown"),
+                strategy=self.strategy_name,
             )
             db.add(trade)
 
@@ -250,7 +252,7 @@ class OrderManager:
                 price=plan.entry_price,
                 status="failed",
                 signal_type=signal.signal,
-                strategy=self.config.get("strategy_name", "unknown"),
+                strategy=self.strategy_name,
             )
             db.add(trade)
 

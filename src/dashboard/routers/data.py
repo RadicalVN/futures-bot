@@ -27,7 +27,7 @@ async def get_trades(limit: int = 50, bot_id: int = None, status: str = None, sy
 
 @router.get("/trades/open")
 async def get_open_trades(bot_id: int = None):
-    """Lấy các lệnh đang mở (status = filled, chưa có closed_at)"""
+    """Lấy các lệnh đang mở (status = filled, chưa có closed_at) + unrealized PnL từ exchange"""
     async with get_db() as db:
         q = select(Trade).options(selectinload(Trade.bot)).where(
             Trade.status == "filled", Trade.closed_at == None
@@ -35,7 +35,36 @@ async def get_open_trades(bot_id: int = None):
         if bot_id:
             q = q.where(Trade.bot_id == bot_id)
         result = await db.execute(q.order_by(desc(Trade.created_at)))
-        return [t.to_dict() for t in result.scalars().all()]
+        trades = result.scalars().all()
+
+    # Lấy unrealized PnL từ exchange (best effort)
+    unrealized_map: dict = {}
+    try:
+        from src.core.bot_manager import _get_global_positions
+        positions = await _get_global_positions()
+        for p in positions:
+            sym = p.get("symbol", "").replace("/", "").replace(":USDT", "")
+            unrealized_map[sym] = {
+                "unrealized_pnl": p.get("unrealizedPnl", 0),
+                "percentage": p.get("percentage", 0),
+                "entry_price": p.get("entry_price", 0),
+            }
+    except Exception:
+        pass
+
+    result_list = []
+    for t in trades:
+        d = t.to_dict()
+        sym_key = t.symbol.replace("/", "").replace(":USDT", "")
+        if sym_key in unrealized_map:
+            d["unrealized_pnl"] = round(float(unrealized_map[sym_key]["unrealized_pnl"] or 0), 4)
+            d["unrealized_pct"] = round(float(unrealized_map[sym_key]["percentage"] or 0), 2)
+        else:
+            d["unrealized_pnl"] = None
+            d["unrealized_pct"] = None
+        result_list.append(d)
+
+    return result_list
 
 @router.get("/trades/stats")
 async def get_trade_stats(bot_id: int = None):
