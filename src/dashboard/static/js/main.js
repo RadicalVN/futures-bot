@@ -35,7 +35,8 @@ window.showPage = function showPage(pageId) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + pageId).classList.add('active');
-  
+
+  // Highlight nav item tương ứng
   if(window.event && window.event.currentTarget && window.event.currentTarget.classList) {
     window.event.currentTarget.classList.add('active');
   } else {
@@ -45,7 +46,10 @@ window.showPage = function showPage(pageId) {
       }
     });
   }
-  
+
+  // Lưu tab hiện tại để restore khi reload
+  localStorage.setItem('activePage', pageId);
+
   if(pageId === 'dashboard') loadDashboard();
   if(pageId === 'mybots') fetchBots();
   if(pageId === 'trades') loadTradesPage();
@@ -59,5 +63,10 @@ window.onload = () => {
   populateSymbolsDatalist();
   loadChart(1);
   loadChart(2);
-  loadDashboard();
+
+  // Restore tab đang active trước khi reload, mặc định là dashboard
+  const savedPage = localStorage.getItem('activePage') || 'dashboard';
+  // strategy-detail không nên restore vì cần context, fallback về strategies
+  const restorePage = savedPage === 'strategy-detail' ? 'strategies' : savedPage;
+  showPage(restorePage);
 };
