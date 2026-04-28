@@ -4,7 +4,14 @@ import { api } from './api.js';
 
 function fmtTime(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('vi-VN', { hour12: false });
+  // Convert UTC → GMT+7
+  const d = new Date(iso);
+  return d.toLocaleString('vi-VN', {
+    hour12: false,
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
 }
 
 function fmtPnl(val) {
@@ -146,7 +153,8 @@ async function _loadOpenTrades() {
       <td>${t.price ? t.price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6}) : '—'}</td>
       <td>${t.amount}</td>
       <td>${t.leverage ? t.leverage + 'x' : '—'}</td>
-      <td>${t.strategy || '—'}</td>
+      <td style="color:#8892a4;font-size:12px;">${t.bot_name || `Bot#${t.bot_id||'?'}`}</td>
+      <td style="color:#8892a4;font-size:12px;">${t.strategy || '—'}</td>
       <td>${statusBadge(t.status)}</td>
     </tr>
   `).join('');
@@ -177,6 +185,8 @@ async function _loadTradeHistory() {
       <td>${t.price ? t.price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6}) : '—'}</td>
       <td>${t.amount}</td>
       <td>${t.leverage ? t.leverage + 'x' : '—'}</td>
+      <td style="color:#8892a4;font-size:12px;">${t.bot_name || `Bot#${t.bot_id||'?'}`}</td>
+      <td style="color:#8892a4;font-size:12px;">${t.strategy || '—'}</td>
       <td>${fmtPnl(t.realized_pnl)}</td>
       <td>${statusBadge(t.status)}</td>
       <td style="color:#8892a4;font-size:12px;">${fmtTime(t.closed_at)}</td>

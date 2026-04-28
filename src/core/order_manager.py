@@ -265,22 +265,25 @@ class OrderManager:
                 .limit(1)
             )
             trade = result.scalar_one_or_none()
+
+            pnl_raw = order.get("info", {}).get("realizedPnl", 0)
+            try:
+                pnl = float(pnl_raw)
+            except (ValueError, TypeError):
+                pnl = 0.0
+
             if trade:
                 trade.status = "closed"
                 trade.closed_at = datetime.utcnow()
+                trade.realized_pnl = pnl  # ← lưu PnL vào Trade record
 
             # Update bot stats
             if getattr(self, 'bot_id', None):
                 result2 = await db.execute(select(Bot).where(Bot.id == self.bot_id))
                 bot = result2.scalar_one_or_none()
                 if bot:
-                    pnl = order.get("info", {}).get("realizedPnl", 0)
-                    try:
-                        pnl = float(pnl)
-                        bot.total_pnl += pnl
-                        if pnl > 0:
-                            bot.winning_trades += 1
-                        elif pnl < 0:
-                            bot.losing_trades += 1
-                    except (ValueError, TypeError):
-                        pass
+                    bot.total_pnl += pnl
+                    if pnl > 0:
+                        bot.winning_trades += 1
+                    elif pnl < 0:
+                        bot.losing_trades += 1

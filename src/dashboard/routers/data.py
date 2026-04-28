@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from sqlalchemy import select, desc, func
+from sqlalchemy.orm import selectinload
 from src.database.db import get_db
 from src.database.models import BotEvent, Trade, Signal, Bot
 
@@ -14,7 +15,7 @@ async def get_events(limit: int = 50):
 @router.get("/trades")
 async def get_trades(limit: int = 50, bot_id: int = None, status: str = None, symbol: str = None):
     async with get_db() as db:
-        q = select(Trade)
+        q = select(Trade).options(selectinload(Trade.bot))
         if bot_id:
             q = q.where(Trade.bot_id == bot_id)
         if status:
@@ -28,7 +29,9 @@ async def get_trades(limit: int = 50, bot_id: int = None, status: str = None, sy
 async def get_open_trades(bot_id: int = None):
     """Lấy các lệnh đang mở (status = filled, chưa có closed_at)"""
     async with get_db() as db:
-        q = select(Trade).where(Trade.status == "filled", Trade.closed_at == None)
+        q = select(Trade).options(selectinload(Trade.bot)).where(
+            Trade.status == "filled", Trade.closed_at == None
+        )
         if bot_id:
             q = q.where(Trade.bot_id == bot_id)
         result = await db.execute(q.order_by(desc(Trade.created_at)))

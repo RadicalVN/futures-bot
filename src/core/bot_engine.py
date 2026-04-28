@@ -350,7 +350,6 @@ class BotEngine:
                 except Exception as e:
                     self.log.warning(f"⚠️ Không lấy được ticker {trading_symbol}: {e} — dùng giá OHLCV")
                     signal.price = ohlcv[-1][4]  # close của nến cuối
-
                 from src.data.indicators import ohlcv_to_dataframe, get_ma_values, get_macd_values
                 df = ohlcv_to_dataframe(ohlcv)
                 indicator_data = {}
@@ -395,7 +394,26 @@ class BotEngine:
                 ):
                     open_symbols.append(symbol)
             else:
-                self.log.debug(f"[none] {trading_symbol} | {signal.reason}")
+                # Log INFO cho signal "none" với đủ thông tin để trace
+                meta = signal.metadata or {}
+                trend    = meta.get("trend", "?")
+                prev_t   = meta.get("prev_trend", "?")
+                momentum = meta.get("momentum", "?")
+                slope    = meta.get("slope_pct")
+                sideway  = meta.get("is_sideway")
+                pullback = meta.get("was_in_pullback")
+
+                detail_parts = [f"Trend={trend}(prev={prev_t})", f"Mom={momentum}"]
+                if slope is not None:
+                    detail_parts.append(f"Slope={slope:+.4f}%")
+                if sideway is not None:
+                    detail_parts.append(f"Sideway={'Y' if sideway else 'N'}")
+                if pullback is not None:
+                    detail_parts.append(f"Pullback={'Y' if pullback else 'N'}")
+
+                self.log.info(
+                    f"[WAIT] {trading_symbol} | {' | '.join(detail_parts)} | {signal.reason}"
+                )
 
         except Exception as e:
             # Catch-all: bất kỳ lỗi nào không được bắt ở trên

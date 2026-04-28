@@ -172,6 +172,7 @@ class Trade(Base):
         return {
             "id": self.id,
             "bot_id": self.bot_id,
+            "bot_name": self.bot.name if self.bot else None,
             "order_id": self.order_id,
             "symbol": self.symbol,
             "side": self.side,
