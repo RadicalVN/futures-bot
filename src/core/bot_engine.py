@@ -253,30 +253,27 @@ class BotEngine:
                 if float(p.get("contracts", p.get("size", 0))) > 0
             ]
 
+            # Tính max_open_positions động theo rủi ro vốn
+            effective_max = await self._calc_effective_max_positions()
+
             self.log.info(
                 f"▶ Quét {len(self.target_symbols)} symbol "
                 f"| TF: {self.timeframe} "
-                f"| Vị thế: {len(open_position_symbols)}/{self.max_open_positions}"
+                f"| Vị thế: {len(open_position_symbols)}/{effective_max}"
             )
 
-            # 2. Quét từng symbol theo chunk
+            # 2. Quét TẤT CẢ symbol — không bỏ qua dù đã đạt max positions
+            #    Việc chặn entry được xử lý trong order_manager, không phải ở đây
             chunk_size = 5
             for i in range(0, len(self.target_symbols), chunk_size):
                 if not self.is_running:
                     break
 
-                current_open_count = len(open_position_symbols)
                 chunk = self.target_symbols[i : i + chunk_size]
-                tasks = []
-                for sym in chunk:
-                    if (
-                        current_open_count >= self.max_open_positions
-                        and sym not in open_position_symbols
-                    ):
-                        self.log.debug(f"Bỏ qua {sym} — đã đạt max positions")
-                        continue
-                    tasks.append(self._analyze_symbol(sym, positions, open_position_symbols))
-
+                tasks = [
+                    self._analyze_symbol(sym, positions, open_position_symbols, effective_max)
+                    for sym in chunk
+                ]
                 if tasks:
                     await asyncio.gather(*tasks)
                     await asyncio.sleep(0.2)
@@ -289,10 +286,50 @@ class BotEngine:
                 f"❌ Lỗi _run_cycle: {type(e).__name__}: {e}\n{traceback.format_exc()}"
             )
 
+    async def _calc_effective_max_positions(self) -> int:
+        """
+        Tính max_open_positions động dựa trên rủi ro vốn.
+        Công thức: max_positions = floor(balance * max_portfolio_risk_pct / (position_size_pct * stop_loss_pct * leverage))
+        Nếu không có max_portfolio_risk_pct → dùng max_open_positions cố định.
+        """
+        max_portfolio_risk_pct = self.parameters.get("max_portfolio_risk_pct", 0)
+        if not max_portfolio_risk_pct:
+            return self.max_open_positions  # fallback cố định
+
+        try:
+            balance = await self.exchange.get_balance()
+            free = balance.get("free", 0)
+            if free <= 0:
+                return self.max_open_positions
+
+            position_size_pct = self.parameters.get("position_size_pct", 0.10)
+            stop_loss_pct     = self.parameters.get("stop_loss_pct", 0.02)
+            leverage          = self.parameters.get("leverage", 5)
+
+            # Rủi ro mỗi lệnh = position_size_pct * stop_loss_pct (không tính leverage vì margin isolated)
+            risk_per_trade = position_size_pct * stop_loss_pct
+            if risk_per_trade <= 0:
+                return self.max_open_positions
+
+            dynamic_max = int(max_portfolio_risk_pct / risk_per_trade)
+            # Giới hạn tối thiểu 1, tối đa max_open_positions
+            result = max(1, min(dynamic_max, self.max_open_positions))
+            self.log.debug(
+                f"Dynamic max positions: {result} "
+                f"(balance=${free:.0f}, risk/trade={risk_per_trade*100:.1f}%, "
+                f"portfolio_risk={max_portfolio_risk_pct*100:.0f}%)"
+            )
+            return result
+        except Exception:
+            return self.max_open_positions
+
     # ── Symbol analysis ───────────────────────────────────────────────────────
 
-    async def _analyze_symbol(self, symbol: str, positions: list, open_symbols: list):
+    async def _analyze_symbol(self, symbol: str, positions: list, open_symbols: list,
+                               effective_max: int = None):
         trading_symbol = _normalize_symbol(symbol)
+        if effective_max is None:
+            effective_max = self.max_open_positions
         try:
             # ── Lấy OHLCV ────────────────────────────────────────────────────
             try:
@@ -381,14 +418,26 @@ class BotEngine:
 
                 self.log.info(f"Signal [{signal.signal.upper()}] {trading_symbol} | {signal.reason}")
 
-                # ── Đặt lệnh ─────────────────────────────────────────────────
-                try:
-                    await self.order_manager.process_signal(signal, indicator_data)
-                except Exception as e:
-                    self.log.error(
-                        f"❌ Lỗi process_signal {trading_symbol}: {type(e).__name__}: {e}\n"
-                        f"{traceback.format_exc()}"
+                # ── Đặt lệnh — chỉ thực thi nếu chưa đạt giới hạn positions ─
+                is_at_limit = (
+                    signal.is_entry
+                    and len(open_symbols) >= effective_max
+                    and trading_symbol.replace("/", "").replace(":USDT", "") not in open_symbols
+                )
+                if is_at_limit:
+                    self.log.info(
+                        f"⚠️ [{signal.signal.upper()}] {trading_symbol} — "
+                        f"Đã đạt giới hạn {effective_max} vị thế, KHÔNG đặt lệnh nhưng vẫn ghi nhận signal"
                     )
+                    # Vẫn lưu signal để report Discord biết có cơ hội
+                else:
+                    try:
+                        await self.order_manager.process_signal(signal, indicator_data)
+                    except Exception as e:
+                        self.log.error(
+                            f"❌ Lỗi process_signal {trading_symbol}: {type(e).__name__}: {e}\n"
+                            f"{traceback.format_exc()}"
+                        )
 
                 if symbol not in open_symbols and (
                     "long" in signal.signal or "short" in signal.signal
@@ -465,6 +514,12 @@ class BotEngine:
             if signal:
                 enriched_meta = dict(signal.metadata or {})
                 no_data = enriched_meta.get("no_data", False)
+                # Đánh dấu nếu có signal nhưng đang bị giới hạn position
+                sym_clean = trading_symbol.replace("/", "").replace(":USDT", "")
+                at_limit = (
+                    signal.signal in ("long", "short")
+                    and sym_clean not in pos_map
+                )
                 bot_reports.append({
                     "bot_id": self.bot_id,
                     "bot_name": self.bot_name,

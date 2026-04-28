@@ -134,9 +134,10 @@ class RiskManager:
         else:
             return current_price <= tp
 
-    def check_max_positions(self, open_positions: list) -> bool:
+    def check_max_positions(self, open_positions: list, max_override: int = None) -> bool:
         """Kiểm tra có còn slot để mở vị thế mới không"""
-        return len(open_positions) < self.max_open_positions
+        limit = max_override if max_override is not None else self.max_open_positions
+        return len(open_positions) < limit
 
     def calculate_trailing_stop(
         self, entry_price: float, current_price: float, side: str
