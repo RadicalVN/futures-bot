@@ -96,13 +96,15 @@ class BotEngine:
     """
 
     def __init__(self, bot_id: int, account_id: int, symbols: list,
-                 strategy_name: str, parameters: dict, bot_name: str = None):
+                 strategy_name: str, parameters: dict, bot_name: str = None,
+                 bot_manager=None):
         self.bot_id = bot_id
         self.account_id = account_id
         self.symbols_config = symbols or ["BTCUSDT"]
         self.strategy_name = strategy_name
         self.parameters = parameters or {}
         self.bot_name = bot_name or f"Bot#{bot_id}"
+        self.bot_manager = bot_manager  # BotManager coordinator
 
         # Parse parameters
         self.timeframe = self.parameters.get("timeframe", "5m")
@@ -245,7 +247,8 @@ class BotEngine:
                 return
 
             open_position_symbols = [
-                p["symbol"] for p in positions
+                p["symbol"].replace("/", "").replace(":USDT", "")
+                for p in positions
                 if float(p.get("contracts", p.get("size", 0))) > 0
             ]
 
@@ -472,9 +475,14 @@ class BotEngine:
         if not bot_reports:
             return
 
-        try:
-            from src.core.discord_notifier import send_discord_message, build_candle_status_embed, DISCORD_REPORT_WEBHOOK_URL
-            embed = build_candle_status_embed(candle_time_str, bot_reports)
-            await send_discord_message(embed=embed, webhook_url=DISCORD_REPORT_WEBHOOK_URL or None)
-        except Exception as e:
-            self.log.error(f"Lỗi gửi candle status report: {e}")
+        # Nếu có BotManager coordinator → gộp report, tránh rate limit Discord
+        if self.bot_manager:
+            await self.bot_manager.collect_report(current_candle_ts, bot_reports)
+        else:
+            # Fallback: tự gửi nếu không có coordinator
+            try:
+                from src.core.discord_notifier import send_discord_message, build_candle_status_embed, DISCORD_REPORT_WEBHOOK_URL
+                embed = build_candle_status_embed(candle_time_str, bot_reports)
+                await send_discord_message(embed=embed, webhook_url=DISCORD_REPORT_WEBHOOK_URL or None)
+            except Exception as e:
+                self.log.error(f"Lỗi gửi candle status report: {e}")
