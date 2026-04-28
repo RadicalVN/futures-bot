@@ -33,6 +33,8 @@ class OrderManager:
         self.margin_mode = config.get("margin_mode", "isolated")
         # strategy_name lấy từ bot_engine khi khởi tạo
         self.strategy_name: str = "unknown"
+        # effective_max được set bởi bot_engine trước mỗi lần process_signal
+        self.effective_max_positions: int = None
 
     async def process_signal(self, signal: StrategySignal, indicator_data: dict = None) -> bool:
         """
@@ -74,9 +76,10 @@ class OrderManager:
 
         logger.info(f"[Entry] {signal.signal.upper()} {symbol} | Số dư: ${free_balance:.2f} USDT | Giá: {signal.price}")
 
-        # Kiểm tra giới hạn số vị thế
-        if not self.risk.check_max_positions(positions):
-            logger.warning(f"[Entry] Đã đạt max positions ({self.risk.max_open_positions}), bỏ qua {symbol}")
+        # Kiểm tra giới hạn số vị thế (safety net — đã check ở bot_engine rồi)
+        if not self.risk.check_max_positions(positions, self.effective_max_positions):
+            limit = self.effective_max_positions or self.risk.max_open_positions
+            logger.warning(f"[Entry] Đã đạt max positions ({limit}), bỏ qua {symbol}")
             return False
 
         if free_balance <= 0:

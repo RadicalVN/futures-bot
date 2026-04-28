@@ -432,6 +432,7 @@ class BotEngine:
                     # Vẫn lưu signal để report Discord biết có cơ hội
                 else:
                     try:
+                        self.order_manager.effective_max_positions = effective_max
                         await self.order_manager.process_signal(signal, indicator_data)
                     except Exception as e:
                         self.log.error(
