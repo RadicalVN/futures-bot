@@ -214,6 +214,12 @@ class BotEngine:
                 if float(p.get("contracts", p.get("size", 0))) > 0
             ]
 
+            self.log.info(
+                f"▶ Quét {len(self.target_symbols)} symbol "
+                f"| TF: {self.timeframe} "
+                f"| Vị thế: {len(open_position_symbols)}/{self.max_open_positions}"
+            )
+
             # 2. Quét từng symbol theo chunk
             chunk_size = 5
             for i in range(0, len(self.target_symbols), chunk_size):
@@ -228,6 +234,7 @@ class BotEngine:
                         current_open_count >= self.max_open_positions
                         and sym not in open_position_symbols
                     ):
+                        self.log.debug(f"Bỏ qua {sym} — đã đạt max positions")
                         continue
                     tasks.append(self._analyze_symbol(sym, positions, open_position_symbols))
 
