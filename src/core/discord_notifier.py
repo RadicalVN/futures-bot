@@ -341,7 +341,8 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
                 met.append(f"✅ MA={ma_color}") if ma_color in BEARISH else missing.append(f"⏳ MA={ma_color}")
 
     # ── Fallback ──────────────────────────────────────────────────────────────
-    else:        if trend == 1:
+    else:
+        if trend == 1:
             met.append("✅ Trend TĂNG")
         elif trend == -1:
             met.append("✅ Trend GIẢM")
