@@ -221,7 +221,7 @@ class EntryOpportunity(Base):
     delete_reason = Column(String(200))                 # Lý do invalidate
 
     # Metadata từ strategy
-    metadata     = Column(JSON, default={})             # slope, momentum, trend, ...
+    signal_metadata = Column("metadata", JSON, default={})  # slope, momentum, trend, ...
     reason       = Column(String(500))                  # Lý do signal từ strategy
 
     created_at   = Column(DateTime, default=datetime.utcnow)
@@ -242,7 +242,7 @@ class EntryOpportunity(Base):
             "executed": self.executed,
             "is_deleted": self.is_deleted,
             "delete_reason": self.delete_reason,
-            "metadata": self.metadata,
+            "metadata": self.signal_metadata,
             "reason": self.reason,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "invalidated_at": self.invalidated_at.isoformat() if self.invalidated_at else None,

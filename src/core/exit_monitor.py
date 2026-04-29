@@ -257,7 +257,7 @@ class ExitMonitor:
                     continue
 
                 # Merge metadata từ opportunity với metadata mới nhất
-                merged_meta = dict(opp.metadata or {})
+                merged_meta = dict(opp.signal_metadata or {})
                 merged_meta.update(meta)  # metadata mới nhất override
 
                 should_exit, reason = _check_exit_condition(

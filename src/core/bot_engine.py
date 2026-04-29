@@ -537,7 +537,7 @@ class BotEngine:
                     leverage=self.parameters.get("leverage", 5),
                     executed=executed,
                     is_deleted=False,
-                    metadata=dict(signal.metadata or {}),
+                    signal_metadata=dict(signal.metadata or {}),
                     reason=signal.reason,
                 )
                 db.add(opp)
