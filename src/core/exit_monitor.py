@@ -83,6 +83,35 @@ def _check_exit_condition(
         if signal_type == "short" and trend == 1:
             return True, f"📈 Trend đảo Tăng"
 
+    elif strategy_name == "sma_macd_cross":
+        ma_color   = ohlcv_meta.get("ma_color", "")
+        sig_color  = ohlcv_meta.get("sig_color", "")
+        macd_color = ohlcv_meta.get("macd_color", "")
+        close_val  = ohlcv_meta.get("close", current_price)
+        ma_val     = ohlcv_meta.get("ma", 0)
+
+        BULLISH = {"blue", "green"}
+        BEARISH = {"red", "orange"}
+
+        if signal_type == "long":
+            if ma_val and close_val < ma_val:
+                return True, f"📉 Giá đóng cửa dưới MA ({close_val:.4f} < {ma_val:.4f})"
+            if ma_color in BEARISH:
+                return True, f"📉 MA chuyển {ma_color}"
+            if sig_color in BEARISH:
+                return True, f"📉 MACD-Signal chuyển {sig_color}"
+            if macd_color == "red" and ma_color == "green":
+                return True, f"📉 MACD đỏ + MA xanh lá (phân kỳ giảm)"
+        elif signal_type == "short":
+            if ma_val and close_val > ma_val:
+                return True, f"📈 Giá đóng cửa trên MA ({close_val:.4f} > {ma_val:.4f})"
+            if ma_color in BULLISH:
+                return True, f"📈 MA chuyển {ma_color}"
+            if sig_color in BULLISH:
+                return True, f"📈 MACD-Signal chuyển {sig_color}"
+            if macd_color == "blue" and ma_color == "orange":
+                return True, f"📈 MACD xanh dương + MA cam (phân kỳ tăng)"
+
     return False, ""
 
 

@@ -16,6 +16,7 @@ from src.strategies.custom_macd import CustomMACDStrategy
 from src.strategies.sma_trend_early_exit import SmaTrendEarlyExitStrategy
 from src.strategies.sma_pullback import SmaPullbackStrategy
 from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
+from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount
 
@@ -200,6 +201,8 @@ class BotEngine:
             self.strategy = SmaPullbackStrategy(self.parameters)
         elif self.strategy_name == "sma_anti_sideway":
             self.strategy = SmaAntiSidewayStrategy(self.parameters)
+        elif self.strategy_name == "sma_macd_cross":
+            self.strategy = SmaMacdCrossStrategy(self.parameters)
         else:
             raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")
 

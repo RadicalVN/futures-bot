@@ -282,9 +282,66 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
             else:
                 missing.append(f"❌ |MomPct|={abs(momentum_pct):.4f}% < ngưỡng {min_mom_pct:.4f}%")
 
+    # ── sma_macd_cross ────────────────────────────────────────────────────────
+    elif strategy_name == "sma_macd_cross":
+        ma_color   = meta.get("ma_color", "")
+        sig_color  = meta.get("sig_color", "")
+        macd_color = meta.get("macd_color", "")
+        close_val  = meta.get("close", 0)
+        ma_val     = meta.get("ma", 0)
+
+        BULLISH = {"blue", "green"}
+        BEARISH = {"red", "orange"}
+
+        if signal_type == "long" or (not signal_type and trend == 1):
+            # Điều kiện 1: Signal chuyển từ bearish → bullish/reversal
+            if sig_color in BULLISH | {"purple"}:
+                met.append(f"✅ MACD-Signal chuyển {sig_color} (từ bearish)")
+            elif sig_color in BEARISH:
+                missing.append(f"❌ MACD-Signal={sig_color} — cần chuyển sang tím/xanh")
+
+            # Điều kiện 2: MACD golden cross
+            macd_v = meta.get("macd", 0)
+            sig_v  = meta.get("macd_signal", 0)
+            if macd_v > sig_v:
+                met.append(f"✅ MACD > Signal (golden cross)")
+            else:
+                missing.append(f"⏳ Chờ MACD cắt lên Signal")
+
+            # Điều kiện 3: Giá trên MA
+            if close_val and ma_val:
+                if close_val > ma_val:
+                    met.append(f"✅ Giá ({close_val:.4f}) trên MA ({ma_val:.4f})")
+                else:
+                    missing.append(f"⏳ Giá ({close_val:.4f}) chưa cắt lên MA ({ma_val:.4f})")
+
+            if ma_color:
+                met.append(f"✅ MA={ma_color}") if ma_color in BULLISH else missing.append(f"⏳ MA={ma_color}")
+
+        else:  # short
+            if sig_color in BEARISH | {"purple"}:
+                met.append(f"✅ MACD-Signal chuyển {sig_color} (từ bullish)")
+            elif sig_color in BULLISH:
+                missing.append(f"❌ MACD-Signal={sig_color} — cần chuyển sang tím/đỏ/cam")
+
+            macd_v = meta.get("macd", 0)
+            sig_v  = meta.get("macd_signal", 0)
+            if macd_v < sig_v:
+                met.append(f"✅ MACD < Signal (death cross)")
+            else:
+                missing.append(f"⏳ Chờ MACD cắt xuống Signal")
+
+            if close_val and ma_val:
+                if close_val < ma_val:
+                    met.append(f"✅ Giá ({close_val:.4f}) dưới MA ({ma_val:.4f})")
+                else:
+                    missing.append(f"⏳ Giá ({close_val:.4f}) chưa cắt xuống MA ({ma_val:.4f})")
+
+            if ma_color:
+                met.append(f"✅ MA={ma_color}") if ma_color in BEARISH else missing.append(f"⏳ MA={ma_color}")
+
     # ── Fallback ──────────────────────────────────────────────────────────────
-    else:
-        if trend == 1:
+    else:        if trend == 1:
             met.append("✅ Trend TĂNG")
         elif trend == -1:
             met.append("✅ Trend GIẢM")
