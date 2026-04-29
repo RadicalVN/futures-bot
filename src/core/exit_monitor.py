@@ -158,7 +158,11 @@ class ExitMonitor:
 
         # Fallback: dùng cache signal
         cached = self.engine._last_signals.get(trading_symbol)
-        meta = dict(cached.metadata or {}) if cached else {}
+        if cached and cached.metadata:
+            raw = cached.metadata
+            meta = dict(raw) if isinstance(raw, dict) else {}
+        else:
+            meta = {}
         return current_price, meta
 
     async def _check_open_trades(self, positions: list):
@@ -284,7 +288,15 @@ class ExitMonitor:
                     continue
 
                 # Merge metadata từ opportunity với metadata mới nhất
-                merged_meta = dict(opp.metadata or {})
+                opp_meta = opp.metadata
+                if opp_meta is None:
+                    opp_meta = {}
+                elif not isinstance(opp_meta, dict):
+                    try:
+                        opp_meta = dict(opp_meta)
+                    except Exception:
+                        opp_meta = {}
+                merged_meta = dict(opp_meta)
                 merged_meta.update(meta)  # metadata mới nhất override
 
                 should_exit, reason = _check_exit_condition(
