@@ -84,6 +84,7 @@
                   <input type="text" id="chartSymbol1" class="form-control" list="binanceSymbols" style="width: 110px; padding: 5px;" placeholder="Mã..." value="BTCUSDT" onchange="onSymbolChange(1)">
                   <datalist id="binanceSymbols"></datalist>
                   <button class="btn btn-primary btn-sm" onclick="globalRefresh()" title="Làm mới" style="padding: 5px 10px;">🔄</button>
+                  <button class="btn btn-sm" onclick="scrollToLatest(1)" title="Về nến mới nhất" style="padding: 5px 10px; background: var(--bg-panel); color: var(--accent); border: 1px solid var(--accent);">⏭</button>
                   <button class="btn btn-sm" onclick="globalReset()" title="Mặc định" style="padding: 5px 10px; background: var(--bg-panel); color: var(--text-primary); border: 1px solid var(--border);">⚙️</button>
               </div>
           </div>
@@ -117,6 +118,7 @@
                   </select>
                   <input type="text" id="chartSymbol2" class="form-control" list="binanceSymbols" style="width: 110px; padding: 5px;" placeholder="Mã..." value="BTCUSDT" onchange="onSymbolChange(2)">
                   <button class="btn btn-primary btn-sm" onclick="globalRefresh()" title="Làm mới" style="padding: 5px 10px;">🔄</button>
+                  <button class="btn btn-sm" onclick="scrollToLatest(2)" title="Về nến mới nhất" style="padding: 5px 10px; background: var(--bg-panel); color: var(--accent); border: 1px solid var(--accent);">⏭</button>
                   <button class="btn btn-sm" onclick="globalReset()" title="Mặc định" style="padding: 5px 10px; background: var(--bg-panel); color: var(--text-primary); border: 1px solid var(--border);">⚙️</button>
               </div>
           </div>

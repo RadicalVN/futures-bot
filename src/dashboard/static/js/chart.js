@@ -713,6 +713,118 @@ function renderChart(data, chartId) {
         };
     }
 
+    // ── Crosshair plugin: đường ngang + dọc khi hover, label giá trên trục Y ──
+    const crosshairPlugin = {
+        id: 'crosshair',
+        _mouseX: null,
+        _mouseY: null,
+        afterEvent(chart, args) {
+            const e = args.event;
+            if (e.type === 'mousemove') {
+                this._mouseX = e.x;
+                this._mouseY = e.y;
+                chart.draw();
+            } else if (e.type === 'mouseout') {
+                this._mouseX = null;
+                this._mouseY = null;
+                chart.draw();
+            }
+        },
+        afterDraw(chart) {
+            const mx = this._mouseX;
+            const my = this._mouseY;
+            if (mx == null || my == null) return;
+
+            const { left, right, top, bottom } = chart.chartArea;
+            if (mx < left || mx > right || my < top || my > bottom) return;
+
+            const ctx = chart.ctx;
+            ctx.save();
+
+            // ── Đường dọc ────────────────────────────────────────────────────
+            ctx.beginPath();
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = 'rgba(150,150,150,0.7)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(mx, top);
+            ctx.lineTo(mx, bottom);
+            ctx.stroke();
+
+            // ── Đường ngang ───────────────────────────────────────────────────
+            ctx.beginPath();
+            ctx.moveTo(left, my);
+            ctx.lineTo(right, my);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // ── Label giá trên trục Y (bên phải) ─────────────────────────────
+            // Tìm trục Y phù hợp với vị trí chuột
+            let yAxis = chart.scales['y'];
+            if (chart.scales['y_macd']) {
+                const yMacd = chart.scales['y_macd'];
+                // Nếu chuột nằm trong vùng MACD thì dùng trục MACD
+                if (my >= yMacd.top && my <= yMacd.bottom) {
+                    yAxis = yMacd;
+                }
+            }
+            const price = yAxis.getValueForPixel(my);
+            if (price == null) { ctx.restore(); return; }
+
+            const priceText = price.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: price < 10 ? 4 : 2
+            });
+
+            ctx.font = 'bold 11px "Inter", sans-serif';
+            const tw = ctx.measureText(priceText).width;
+            const bw = tw + 10;
+            const bh = 20;
+            const bx = right;
+            const by = my - bh / 2;
+
+            ctx.fillStyle = 'rgba(50,50,60,0.92)';
+            ctx.beginPath();
+            ctx.moveTo(bx - 6, my);
+            ctx.lineTo(bx, by);
+            ctx.lineTo(bx + bw, by);
+            ctx.lineTo(bx + bw, by + bh);
+            ctx.lineTo(bx, by + bh);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(priceText, bx + bw / 2, my);
+
+            // ── Label thời gian trên trục X (phía dưới) ──────────────────────
+            const xAxis = chart.scales['x'];
+            const ts = xAxis.getValueForPixel(mx);
+            if (ts != null) {
+                const d = new Date(ts);
+                const timeStr = d.toLocaleString('vi-VN', {
+                    timeZone: 'Asia/Ho_Chi_Minh',
+                    month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit',
+                    hour12: false
+                });
+                const ttw = ctx.measureText(timeStr).width + 12;
+                const tth = 20;
+                const ttx = mx - ttw / 2;
+                const tty = bottom + 2;
+
+                ctx.fillStyle = 'rgba(50,50,60,0.92)';
+                ctx.fillRect(ttx, tty, ttw, tth);
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(timeStr, mx, tty + tth / 2);
+            }
+
+            ctx.restore();
+        }
+    };
+
     const splitPanePlugin = {
         id: 'splitPane',
         beforeDraw(chart) {
@@ -898,6 +1010,29 @@ function renderChart(data, chartId) {
                 }
             }
         },
-        plugins: [splitPanePlugin, customCanvasBackgroundColor, currentPricePlugin]
+        plugins: [splitPanePlugin, customCanvasBackgroundColor, currentPricePlugin, crosshairPlugin]
     });
+}
+
+// ── Scroll to latest candle ───────────────────────────────────────────────────
+export function scrollToLatest(chartId) {
+    const chart = chartInstances[chartId];
+    if (!chart) return;
+
+    const priceDs = chart.data.datasets.find(d => d.label === 'Giá');
+    if (!priceDs || !priceDs.data.length) return;
+
+    const tf = document.getElementById(`chartTimeframe${chartId}`)?.value || '5m';
+    const tfMs = TF_MS[tf] || 300000;
+
+    const lastX = priceDs.data[priceDs.data.length - 1].x;
+    const visibleSpan = chart.scales.x.max - chart.scales.x.min;
+
+    // Đặt nến cuối cách lề phải 5 nến
+    const newMax = lastX + 5 * tfMs;
+    const newMin = newMax - visibleSpan;
+
+    chart.options.scales.x.min = newMin;
+    chart.options.scales.x.max = newMax;
+    chart.update('none');
 }
