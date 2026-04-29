@@ -346,11 +346,25 @@ class BotEngine:
             try:
                 ohlcv = await self.exchange.fetch_ohlcv(trading_symbol, self.timeframe, self.lookback)
             except Exception as e:
-                self.log.error(f"❌ Lỗi fetch OHLCV {trading_symbol}: {type(e).__name__}: {e}")
-                self._last_signals[trading_symbol] = _make_error_signal(
-                    trading_symbol, e, f"fetch_ohlcv({self.timeframe}, lookback={self.lookback})"
-                )
-                return
+                # Retry 1 lần nếu timeout
+                if "Timeout" in type(e).__name__ or "timeout" in str(e).lower():
+                    self.log.warning(f"⚠️ Timeout fetch OHLCV {trading_symbol}, thử lại...")
+                    try:
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(2)
+                        ohlcv = await self.exchange.fetch_ohlcv(trading_symbol, self.timeframe, self.lookback)
+                    except Exception as e2:
+                        self.log.error(f"❌ Lỗi fetch OHLCV {trading_symbol} (retry): {type(e2).__name__}: {e2}")
+                        self._last_signals[trading_symbol] = _make_error_signal(
+                            trading_symbol, e2, f"fetch_ohlcv retry failed"
+                        )
+                        return
+                else:
+                    self.log.error(f"❌ Lỗi fetch OHLCV {trading_symbol}: {type(e).__name__}: {e}")
+                    self._last_signals[trading_symbol] = _make_error_signal(
+                        trading_symbol, e, f"fetch_ohlcv({self.timeframe}, lookback={self.lookback})"
+                    )
+                    return
 
             if not ohlcv:
                 msg = f"Exchange trả về OHLCV rỗng cho {trading_symbol}"
