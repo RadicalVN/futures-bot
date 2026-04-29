@@ -202,6 +202,11 @@ class BotEngine:
         elif self.strategy_name == "sma_anti_sideway":
             self.strategy = SmaAntiSidewayStrategy(self.parameters)
         elif self.strategy_name == "sma_macd_cross":
+            # MACD signal_length có thể lên tới 500 → cần lookback lớn hơn
+            self.lookback = max(
+                self.lookback,
+                int(self.parameters.get("macd_signal_length", 500)) + 50,
+            )
             self.strategy = SmaMacdCrossStrategy(self.parameters)
         else:
             raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")

@@ -181,6 +181,41 @@ class ExitMonitor:
                     "momentum_pct": float(df["custom_sma_momentum_pct"].iloc[-1]),
                     "is_sideway": abs(float(df["custom_sma_slope_pct"].iloc[-1])) < self.engine.parameters.get("sideway_slope_threshold", 0.01),
                 }
+
+                # Thêm MACD fields cho sma_macd_cross
+                if self.engine.strategy_name == "sma_macd_cross":
+                    try:
+                        from src.data.indicators import add_custom_macd_to_df
+                        p = self.engine.parameters
+                        df = add_custom_macd_to_df(
+                            df,
+                            fast=p.get("macd_fast", 12),
+                            slow=p.get("macd_slow", 26),
+                            signal_length=p.get("macd_signal_length", 500),
+                            src=p.get("macd_src", "EMA"),
+                            sig_type=p.get("macd_sig_type", "EMA"),
+                        )
+                        # Tính màu slope cho MA, MACD, Signal
+                        def _sc(c, p2, o):
+                            if c == p2: return "yellow"
+                            sc = c - p2; sp = p2 - o
+                            if c > p2: return "blue" if sc >= sp else "green"
+                            else: return "red" if sc <= sp else "orange"
+
+                        ma_arr  = df["custom_sma_basis"].to_numpy()
+                        sig_arr = df["custom_macd_signal"].to_numpy()
+                        mac_arr = df["custom_macd"].to_numpy()
+                        i = len(df) - 1
+                        meta["ma_color"]   = _sc(ma_arr[i],  ma_arr[i-1],  ma_arr[i-2])
+                        meta["sig_color"]  = _sc(sig_arr[i], sig_arr[i-1], sig_arr[i-2])
+                        meta["macd_color"] = _sc(mac_arr[i], mac_arr[i-1], mac_arr[i-2])
+                        meta["ma"]         = float(ma_arr[i])
+                        meta["macd"]       = float(mac_arr[i])
+                        meta["macd_signal"] = float(sig_arr[i])
+                        meta["close"]      = float(df["close"].iloc[-1])
+                    except Exception as e_macd:
+                        self.log.debug(f"ExitMonitor MACD meta error: {e_macd}")
+
                 return current_price, meta
         except Exception as e:
             self.log.debug(f"ExitMonitor _get_current_meta fallback to cache: {e}")
