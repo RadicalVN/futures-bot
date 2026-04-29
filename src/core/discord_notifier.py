@@ -377,6 +377,9 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
             if missing:
                 lines.append("**Còn thiếu:**")
                 lines.extend(f"  {c}" for c in missing)
+            elif met and not missing and not position:
+                # Tất cả điều kiện đã thỏa → highlight rõ
+                lines.append("**🚀 ĐỦ ĐIỀU KIỆN VÀO LỆNH!**")
 
             # Raw indicators
             slope = meta.get("slope_pct")

@@ -260,13 +260,22 @@ class BotEngine:
                 if float(p.get("contracts", p.get("size", 0))) > 0
             ]
 
+            # Lọc chỉ lấy positions liên quan đến symbols của bot này
+            bot_symbols_clean = [
+                _normalize_symbol(s).replace("/", "").replace(":USDT", "")
+                for s in self.target_symbols
+            ]
+            bot_open_count = sum(
+                1 for sym in open_position_symbols if sym in bot_symbols_clean
+            )
+
             # Tính max_open_positions động theo rủi ro vốn
             effective_max = await self._calc_effective_max_positions()
 
             self.log.info(
                 f"▶ Quét {len(self.target_symbols)} symbol "
                 f"| TF: {self.timeframe} "
-                f"| Vị thế: {len(open_position_symbols)}/{effective_max}"
+                f"| Vị thế bot này: {bot_open_count}/{effective_max}"
             )
 
             # 2. Quét TẤT CẢ symbol — không bỏ qua dù đã đạt max positions
@@ -278,7 +287,7 @@ class BotEngine:
 
                 chunk = self.target_symbols[i : i + chunk_size]
                 tasks = [
-                    self._analyze_symbol(sym, positions, open_position_symbols, effective_max)
+                    self._analyze_symbol(sym, positions, open_position_symbols, effective_max, bot_open_count)
                     for sym in chunk
                 ]
                 if tasks:
@@ -337,7 +346,7 @@ class BotEngine:
     # ── Symbol analysis ───────────────────────────────────────────────────────
 
     async def _analyze_symbol(self, symbol: str, positions: list, open_symbols: list,
-                               effective_max: int = None):
+                               effective_max: int = None, bot_open_count: int = 0):
         trading_symbol = _normalize_symbol(symbol)
         if effective_max is None:
             effective_max = self.max_open_positions
@@ -450,8 +459,8 @@ class BotEngine:
                 # ── Đặt lệnh — chỉ thực thi nếu chưa đạt giới hạn positions ─
                 is_at_limit = (
                     signal.is_entry
-                    and len(open_symbols) >= effective_max
-                    and trading_symbol.replace("/", "").replace(":USDT", "") not in open_symbols
+                    and bot_open_count >= effective_max
+                    and trading_symbol.replace("/", "").replace(":USDT", "") not in open_position_symbols
                 )
                 if is_at_limit:
                     self.log.info(
