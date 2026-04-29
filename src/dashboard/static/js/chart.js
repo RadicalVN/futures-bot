@@ -59,6 +59,8 @@ function renderHtmlLegend(chartId) {
         else if (ds.backgroundColor && typeof ds.backgroundColor === 'string' && ds.backgroundColor !== 'transparent') color = ds.backgroundColor;
         else if (ds.label === 'Giá') color = '#0ecb81';
         else if (ds.label === 'TVT-Trend') color = '#2196F3';
+        else if (ds.label === 'MACD') color = '#2196F3';
+        else if (ds.label === 'MACD Signal') color = '#2196F3';
         
         html += `
         <div class="legend-item" onclick="toggleDataset(${chartId}, ${idx})" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: ${isHidden ? '#666' : 'var(--text-primary)'}; text-decoration: ${isHidden ? 'line-through' : 'none'}; padding: 4px;">
@@ -593,7 +595,17 @@ function renderChart(data, chartId) {
             type: 'line',
             label: 'MACD',
             data: macdWithMom,
-            borderColor: '#2962FF',
+            spanGaps: true,
+            segment: {
+                borderColor: ctx => {
+                    if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
+                    const curr = ctx.p1.parsed.y;
+                    const prev = ctx.p0.parsed.y;
+                    if (curr > prev) return '#2196F3';  // blue — đang tăng
+                    if (curr < prev) return '#f6465d';  // red — đang giảm
+                    return '#FFEB3B';                   // yellow — đi ngang
+                }
+            },
             borderWidth: 1.5,
             pointRadius: 0,
             yAxisID: 'y_macd'
@@ -629,7 +641,17 @@ function renderChart(data, chartId) {
             type: 'line',
             label: 'MACD Signal',
             data: signalWithMom,
-            borderColor: '#FF6D00',
+            spanGaps: true,
+            segment: {
+                borderColor: ctx => {
+                    if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
+                    const curr = ctx.p1.parsed.y;
+                    const prev = ctx.p0.parsed.y;
+                    if (curr > prev) return '#2196F3';  // blue — đang tăng
+                    if (curr < prev) return '#f6465d';  // red — đang giảm
+                    return '#FFEB3B';                   // yellow — đi ngang
+                }
+            },
             borderWidth: 1.5,
             pointRadius: 0,
             yAxisID: 'y_macd'
