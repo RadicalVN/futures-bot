@@ -468,6 +468,40 @@ function renderChart(data, chartId) {
     
     const activeIndicatorsIds = JSON.parse(localStorage.getItem('activeIndicators')) || ['custom_sma', 'custom_macd'];
     const smaUpData = data.map(d => ({x: d.x, y: d.sma_up === 0 ? null : d.sma_up}));
+
+    // ── Helper: màu đường theo độ dốc + gia tốc (giống rule dấu + TVT-MA-Cross) ──
+    // So sánh 3 điểm: older(p0-1), prev(p0), curr(p1)
+    // Xanh dương: dốc lên + tăng tốc | Xanh lá: dốc lên + giảm tốc
+    // Đỏ: dốc xuống + tăng tốc       | Cam: dốc xuống + giảm tốc
+    // Vàng: đi ngang
+    function slopeColor(ctx) {
+        if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
+        const curr = ctx.p1.parsed.y;
+        const prev = ctx.p0.parsed.y;
+        if (curr === prev) return '#FFEB3B'; // vàng — đi ngang
+
+        // Lấy điểm trước prev để tính gia tốc
+        const p0idx = ctx.p0DataIndex;
+        const dataset = ctx.chart.data.datasets[ctx.datasetIndex];
+        const older = (p0idx > 0 && dataset.data[p0idx - 1]?.y != null)
+            ? dataset.data[p0idx - 1].y
+            : prev;
+
+        const slope_curr = curr - prev;    // độ dốc hiện tại
+        const slope_prev = prev - older;   // độ dốc trước đó
+
+        if (curr > prev) {
+            // Đang dốc lên
+            return slope_curr >= slope_prev
+                ? '#2196F3'   // xanh dương — tăng tốc
+                : '#4CAF50';  // xanh lá — giảm tốc
+        } else {
+            // Đang dốc xuống
+            return slope_curr <= slope_prev
+                ? '#f6465d'   // đỏ — tăng tốc xuống
+                : '#FF9800';  // cam — giảm tốc xuống
+        }
+    }
     const smaDnData = data.map(d => ({x: d.x, y: d.sma_dn === 0 ? null : d.sma_dn}));
     const macdData = data.map(d => ({x: d.x, y: d.macd}));
     const macdSignalData = data.map(d => ({x: d.x, y: d.macd_signal}));
@@ -524,17 +558,7 @@ function renderChart(data, chartId) {
             label: 'TVT-MA', 
             data: smaBasisData, 
             spanGaps: true,
-            segment: {
-                borderColor: ctx => {
-                    if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
-                    const curr = ctx.p1.parsed.y;
-                    const prev = ctx.p0.parsed.y;
-                    if (curr > prev) return '#2196F3'; // blue
-                    if (curr < prev) return '#f6465d'; // red
-                    return '#FFEB3B'; // yellow
-                }
-            },
-            borderWidth: 2, 
+            segment: { borderColor: slopeColor },            borderWidth: 2, 
             pointRadius: 0, 
             yAxisID: 'y' 
         });
@@ -596,16 +620,7 @@ function renderChart(data, chartId) {
             label: 'MACD',
             data: macdWithMom,
             spanGaps: true,
-            segment: {
-                borderColor: ctx => {
-                    if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
-                    const curr = ctx.p1.parsed.y;
-                    const prev = ctx.p0.parsed.y;
-                    if (curr > prev) return '#2196F3';  // blue — đang tăng
-                    if (curr < prev) return '#f6465d';  // red — đang giảm
-                    return '#FFEB3B';                   // yellow — đi ngang
-                }
-            },
+            segment: { borderColor: slopeColor },
             borderWidth: 1.5,
             pointRadius: 0,
             yAxisID: 'y_macd'
@@ -642,16 +657,7 @@ function renderChart(data, chartId) {
             label: 'MACD Signal',
             data: signalWithMom,
             spanGaps: true,
-            segment: {
-                borderColor: ctx => {
-                    if (!ctx.p0 || !ctx.p1 || !ctx.p0.parsed || !ctx.p1.parsed) return '#2196F3';
-                    const curr = ctx.p1.parsed.y;
-                    const prev = ctx.p0.parsed.y;
-                    if (curr > prev) return '#2196F3';  // blue — đang tăng
-                    if (curr < prev) return '#f6465d';  // red — đang giảm
-                    return '#FFEB3B';                   // yellow — đi ngang
-                }
-            },
+            segment: { borderColor: slopeColor },
             borderWidth: 1.5,
             pointRadius: 0,
             yAxisID: 'y_macd'
