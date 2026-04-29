@@ -595,6 +595,17 @@ class BotEngine:
 
             if signal:
                 enriched_meta = dict(signal.metadata or {})
+                # Thêm giá entry và SL/TP vào metadata để report hiển thị
+                enriched_meta["entry_price"] = signal.price
+                try:
+                    sl, tp = self.risk_manager._calculate_sl_tp(
+                        signal.price,
+                        "buy" if signal.signal == "long" else "sell"
+                    )
+                    enriched_meta["stop_loss"] = sl
+                    enriched_meta["take_profit"] = tp
+                except Exception:
+                    pass
                 no_data = enriched_meta.get("no_data", False)
                 # Đánh dấu nếu có signal nhưng đang bị giới hạn position
                 sym_clean = trading_symbol.replace("/", "").replace(":USDT", "")

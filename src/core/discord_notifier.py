@@ -355,42 +355,83 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
         lines = [header_suffix]
 
         if no_data and not position:
-            # Hiển thị lý do thiếu data rõ ràng
             error_msg = meta.get("error", r.get("reason", "Không rõ"))
             tb = meta.get("traceback", "")
             if tb:
-                # Có traceback → lỗi runtime
                 lines.append(f"**Lỗi:** `{error_msg[:200]}`")
-                # Lấy 3 dòng cuối traceback để hiển thị
                 tb_lines = [l for l in tb.strip().splitlines() if l.strip()]
                 tb_short = "\n".join(tb_lines[-4:]) if len(tb_lines) > 4 else "\n".join(tb_lines)
                 lines.append(f"```\n{tb_short[:500]}\n```")
             else:
                 lines.append(f"```{error_msg[:300]}```")
+
         elif not meta and not position:
             lines.append("_Chưa có dữ liệu — chờ chu kỳ quét đầu tiên_")
+
         else:
-            if met:
-                lines.append("**Đã thỏa:**")
+            ready_to_enter = met and not missing and not position
+
+            if ready_to_enter:
+                # ── ĐỦ ĐIỀU KIỆN: hiển thị đầy đủ thông tin để vào lệnh ──────
+                side_label = "SHORT 🔴" if "GIẢM" in " ".join(met) or meta.get("trend") == -1 else "LONG 🟢"
+                entry_price = meta.get("entry_price") or meta.get("price", 0)
+                sl = meta.get("stop_loss") or params.get("stop_loss_pct", 0.02)
+                tp = meta.get("take_profit") or params.get("take_profit_pct", 0.04)
+                leverage = params.get("leverage", 5)
+                reason_text = r.get("reason", "")
+
+                lines.append(f"**🚀 ĐỦ ĐIỀU KIỆN VÀO LỆNH — {side_label}**")
+                lines.append("")
+                lines.append("**Điều kiện đã thỏa:**")
                 lines.extend(f"  {c}" for c in met)
+                lines.append("")
 
-            if missing:
-                lines.append("**Còn thiếu:**")
-                lines.extend(f"  {c}" for c in missing)
-            elif met and not missing and not position:
-                # Tất cả điều kiện đã thỏa → highlight rõ
-                lines.append("**🚀 ĐỦ ĐIỀU KIỆN VÀO LỆNH!**")
+                # Thông tin giao dịch
+                info_parts = []
+                if entry_price:
+                    info_parts.append(f"💰 Giá: `{entry_price:,.4f}`")
+                info_parts.append(f"⚙️ Đòn bẩy: `{leverage}x`")
+                if isinstance(sl, float) and sl < 1:
+                    info_parts.append(f"🛑 SL: `{sl*100:.1f}%`")
+                if isinstance(tp, float) and tp < 1:
+                    info_parts.append(f"🎯 TP: `{tp*100:.1f}%`")
+                if info_parts:
+                    lines.append("  ".join(info_parts))
 
-            # Raw indicators
-            slope = meta.get("slope_pct")
-            mom   = meta.get("momentum")
-            if slope is not None or mom is not None:
-                raw_parts = []
-                if slope is not None:
-                    raw_parts.append(f"Slope={slope:+.4f}%")
-                if mom:
-                    raw_parts.append(f"Mom={mom}")
-                lines.append(f"`{' | '.join(raw_parts)}`")
+                if reason_text:
+                    lines.append(f"📝 `{reason_text[:200]}`")
+
+                # Raw indicators
+                slope = meta.get("slope_pct")
+                mom   = meta.get("momentum")
+                if slope is not None or mom is not None:
+                    raw_parts = []
+                    if slope is not None:
+                        raw_parts.append(f"Slope={slope:+.4f}%")
+                    if mom:
+                        raw_parts.append(f"Mom={mom}")
+                    lines.append(f"`{' | '.join(raw_parts)}`")
+
+            else:
+                # ── Chưa đủ điều kiện: hiển thị đã thỏa / còn thiếu ──────────
+                if met:
+                    lines.append("**Đã thỏa:**")
+                    lines.extend(f"  {c}" for c in met)
+
+                if missing:
+                    lines.append("**Còn thiếu:**")
+                    lines.extend(f"  {c}" for c in missing)
+
+                # Raw indicators
+                slope = meta.get("slope_pct")
+                mom   = meta.get("momentum")
+                if slope is not None or mom is not None:
+                    raw_parts = []
+                    if slope is not None:
+                        raw_parts.append(f"Slope={slope:+.4f}%")
+                    if mom:
+                        raw_parts.append(f"Mom={mom}")
+                    lines.append(f"`{' | '.join(raw_parts)}`")
 
         value = "\n".join(lines)
 
