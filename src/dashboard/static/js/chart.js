@@ -257,15 +257,10 @@ async function silentFetchChart(chartId) {
                 else if (d.sma_trend === -1 && d.sma_dn !== 0) val = d.sma_dn;
                 return { x: d.x, y: val, trend: d.sma_trend };
             });
-            const macdData = newData.map(d => ({x: d.x, y: d.macd}));
-            const macdSignalData = newData.map(d => ({x: d.x, y: d.macd_signal}));
-            const histData = macdData.map((d, i) => {
-                let val = null;
-                if (d.y !== null && macdSignalData[i] && macdSignalData[i].y !== null) {
-                    val = d.y - macdSignalData[i].y;
-                }
-                return { x: d.x, y: val };
-            });
+            const macdData = newData.map(d => ({x: d.x, y: d.macd, momentum: d.macd_momentum || 'yellow'}));
+            const macdSignalData = newData.map(d => ({x: d.x, y: d.macd_signal, momentum: d.macd_sig_momentum || 'yellow'}));
+            const histData = newData.map(d => ({x: d.x, y: d.macd_hist, color: d.macd_hist_color || 'above_grow'}));
+            const HIST_COLORS = {'above_grow':'#26A69A','above_fall':'#B2DFDB','below_grow':'#FFCDD2','below_fall':'#FF5252'};
 
             function mergeData(oldData, newChunk) {
                 if (!oldData || !oldData.length) return newChunk;
@@ -283,10 +278,12 @@ async function silentFetchChart(chartId) {
                 if(ds.label === 'TVT-MA') ds.data = mergeData(ds.data, smaBasisData);
                 if(ds.label === 'TVT-MA-Cross') ds.data = mergeData(ds.data, smaBasisData);
                 if(ds.label === 'MACD') ds.data = mergeData(ds.data, macdData);
+                if(ds.label === 'MACD-Cross') ds.data = mergeData(ds.data, macdData);
                 if(ds.label === 'MACD Signal') ds.data = mergeData(ds.data, macdSignalData);
+                if(ds.label === 'MACD-Signal-Cross') ds.data = mergeData(ds.data, macdSignalData);
                 if(ds.label === 'MACD Hist') {
                     ds.data = mergeData(ds.data, histData);
-                    ds.backgroundColor = ds.data.map(d => d.y !== null && d.y >= 0 ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)');
+                    ds.backgroundColor = ds.data.map(d => HIST_COLORS[d.color] || '#888');
                 }
             });
             chartInstances[chartId].update('none'); // Update ngầm
@@ -563,17 +560,99 @@ function renderChart(data, chartId) {
     }
 
     if (activeIndicatorsIds.includes('custom_macd')) {
-        const histData = macdData.map((d, i) => {
-            let val = null;
-            if (d.y !== null && macdSignalData[i] && macdSignalData[i].y !== null) {
-                val = d.y - macdSignalData[i].y;
-            }
-            return { x: d.x, y: val };
+        // ── Histogram với 4 màu ──────────────────────────────────────────────
+        const histData = data.map(d => ({
+            x: d.x,
+            y: d.macd_hist,
+            color: d.macd_hist_color || 'above_grow'
+        }));
+
+        const HIST_COLORS = {
+            'above_grow': '#26A69A',  // xanh ngọc đậm
+            'above_fall': '#B2DFDB',  // xanh ngọc nhạt
+            'below_grow': '#FFCDD2',  // đỏ nhạt
+            'below_fall': '#FF5252',  // đỏ đậm
+        };
+
+        datasets.push({
+            type: 'bar',
+            label: 'MACD Hist',
+            data: histData,
+            backgroundColor: histData.map(d => HIST_COLORS[d.color] || '#888'),
+            yAxisID: 'y_macd'
         });
 
-        datasets.push({ type: 'bar', label: 'MACD Hist', data: histData, backgroundColor: histData.map(d => d.y !== null && d.y >= 0 ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)'), yAxisID: 'y_macd' });
-        datasets.push({ type: 'line', label: 'MACD', data: macdData, borderColor: '#2962FF', borderWidth: 1.5, pointRadius: 0, yAxisID: 'y_macd' });
-        datasets.push({ type: 'line', label: 'MACD Signal', data: macdSignalData, borderColor: '#FF6D00', borderWidth: 1.5, pointRadius: 0, yAxisID: 'y_macd' });
+        // ── MACD line + momentum cross ───────────────────────────────────────
+        const macdWithMom = data.map(d => ({
+            x: d.x,
+            y: d.macd,
+            momentum: d.macd_momentum || 'yellow'
+        }));
+
+        datasets.push({
+            type: 'line',
+            label: 'MACD',
+            data: macdWithMom,
+            borderColor: '#2962FF',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            yAxisID: 'y_macd'
+        });
+
+        datasets.push({
+            type: 'scatter',
+            label: 'MACD-Cross',
+            data: macdWithMom,
+            borderColor: function(context) {
+                const mom = context.raw?.momentum;
+                if (!mom) return 'transparent';
+                const MAP = {
+                    'yellow': '#FFEB3B', 'orange': '#FF9800', 'purple': '#9C27B0',
+                    'blue': '#2196F3', 'red': '#f6465d', 'green': '#4CAF50'
+                };
+                return MAP[mom] || mom;
+            },
+            pointStyle: 'cross',
+            pointRadius: 3,
+            borderWidth: 2,
+            yAxisID: 'y_macd'
+        });
+
+        // ── Signal line + momentum cross ─────────────────────────────────────
+        const signalWithMom = data.map(d => ({
+            x: d.x,
+            y: d.macd_signal,
+            momentum: d.macd_sig_momentum || 'yellow'
+        }));
+
+        datasets.push({
+            type: 'line',
+            label: 'MACD Signal',
+            data: signalWithMom,
+            borderColor: '#FF6D00',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            yAxisID: 'y_macd'
+        });
+
+        datasets.push({
+            type: 'scatter',
+            label: 'MACD-Signal-Cross',
+            data: signalWithMom,
+            borderColor: function(context) {
+                const mom = context.raw?.momentum;
+                if (!mom) return 'transparent';
+                const MAP = {
+                    'yellow': '#FFEB3B', 'orange': '#FF9800', 'purple': '#9C27B0',
+                    'blue': '#2196F3', 'red': '#f6465d', 'green': '#4CAF50'
+                };
+                return MAP[mom] || mom;
+            },
+            pointStyle: 'cross',
+            pointRadius: 3,
+            borderWidth: 2,
+            yAxisID: 'y_macd'
+        });
     }
 
     let chartScales = {

@@ -83,7 +83,11 @@ async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000,
                 "sma_slope_pct": None if pd.isna(row.get('custom_sma_slope_pct')) else row['custom_sma_slope_pct'],
                 "sma_momentum_pct": None if pd.isna(row.get('custom_sma_momentum_pct')) else row['custom_sma_momentum_pct'],
                 "macd": None if pd.isna(row.get('custom_macd')) else row['custom_macd'],
-                "macd_signal": None if pd.isna(row.get('custom_macd_signal')) else row['custom_macd_signal']
+                "macd_signal": None if pd.isna(row.get('custom_macd_signal')) else row['custom_macd_signal'],
+                "macd_hist": None if pd.isna(row.get('custom_macd_hist')) else row['custom_macd_hist'],
+                "macd_hist_color": row.get('custom_macd_hist_color') or 'above_grow',
+                "macd_momentum": row.get('custom_macd_momentum') or 'yellow',
+                "macd_sig_momentum": row.get('custom_macd_sig_momentum') or 'yellow',
             })
         return {"symbol": symbol, "data": formatted_data}
     except Exception as e:

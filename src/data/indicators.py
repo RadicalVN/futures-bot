@@ -293,8 +293,24 @@ def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, fa
     
     return df
 
-def add_custom_macd_to_df(df: pd.DataFrame, fast=12, slow=26, sig=9, src="EMA", sig_type="EMA") -> pd.DataFrame:
+def add_custom_macd_to_df(
+    df: pd.DataFrame,
+    fast: int = 12,
+    slow: int = 26,
+    signal_length: int = 500,
+    src: str = "EMA",       # "EMA" | "SMA" — loại MA cho oscillator
+    sig_type: str = "EMA",  # "EMA" | "SMA" — loại MA cho signal line
+) -> pd.DataFrame:
+    """
+    Custom MACD - TuanTV1008
+    Khác MACD chuẩn:
+    - signal_length mặc định 500 (chuẩn = 9) → Signal cực mượt
+    - Histogram 4 màu: above_grow / above_fall / below_grow / below_fall
+    - Momentum cross markers trên MACD line và Signal line (giống Custom SMA)
+    """
     close = df['close']
+
+    # ── Tính MACD line ────────────────────────────────────────────────────────
     if src == "SMA":
         fast_ma = close.rolling(fast).mean()
         slow_ma = close.rolling(slow).mean()
@@ -302,13 +318,71 @@ def add_custom_macd_to_df(df: pd.DataFrame, fast=12, slow=26, sig=9, src="EMA", 
         fast_ma = close.ewm(span=fast, adjust=False).mean()
         slow_ma = close.ewm(span=slow, adjust=False).mean()
 
-    macd = fast_ma - slow_ma
+    macd_line = fast_ma - slow_ma
 
+    # ── Tính Signal line ──────────────────────────────────────────────────────
     if sig_type == "SMA":
-        signal_line = macd.rolling(sig).mean()
+        signal_line = macd_line.rolling(signal_length).mean()
     else:
-        signal_line = macd.ewm(span=sig, adjust=False).mean()
+        signal_line = macd_line.ewm(span=signal_length, adjust=False).mean()
 
-    df['custom_macd'] = macd
-    df['custom_macd_signal'] = signal_line
+    # ── Histogram ─────────────────────────────────────────────────────────────
+    hist = macd_line - signal_line
+
+    # ── Histogram color: 4 trạng thái ────────────────────────────────────────
+    # above_grow  (#26A69A): hist > 0 và đang tăng
+    # above_fall  (#B2DFDB): hist > 0 và đang giảm
+    # below_grow  (#FFCDD2): hist < 0 và đang tăng (về 0)
+    # below_fall  (#FF5252): hist < 0 và đang giảm (xa 0)
+    hist_arr = hist.to_numpy()
+    hist_color = np.full(len(df), 'above_grow', dtype=object)
+    for i in range(1, len(df)):
+        h_curr = hist_arr[i]
+        h_prev = hist_arr[i - 1]
+        if np.isnan(h_curr) or np.isnan(h_prev):
+            hist_color[i] = 'above_grow'
+        elif h_curr >= 0:
+            hist_color[i] = 'above_grow' if h_curr >= h_prev else 'above_fall'
+        else:
+            hist_color[i] = 'below_grow' if h_curr >= h_prev else 'below_fall'
+
+    # ── Momentum state cho MACD line và Signal line ───────────────────────────
+    def _calc_momentum(series_arr: np.ndarray) -> np.ndarray:
+        """Tính momentum state giống Custom SMA (yellow/blue/orange/purple/red/green)."""
+        state = np.full(len(series_arr), 'yellow', dtype=object)
+        for i in range(2, len(series_arr)):
+            s0 = series_arr[i]
+            s1 = series_arr[i - 1]
+            s2 = series_arr[i - 2]
+            if np.isnan(s0) or np.isnan(s1) or np.isnan(s2):
+                continue
+            s0_hope = 2 * s1 - s2          # nội suy tuyến tính
+            trend_val = s0 - s0_hope        # momentum diff
+            diff_2_1 = s2 - s1              # sma21
+            diff_1_0 = s1 - s0              # sma10
+
+            if trend_val == 0:
+                state[i] = 'yellow'
+            elif trend_val > 0:
+                if diff_2_1 > 0:
+                    state[i] = 'orange' if diff_1_0 > 0 else 'purple'
+                else:
+                    state[i] = 'blue'
+            else:
+                if diff_2_1 > 0:
+                    state[i] = 'red'
+                else:
+                    state[i] = 'green' if diff_1_0 < 0 else 'purple'
+        return state
+
+    macd_arr   = macd_line.to_numpy()
+    signal_arr = signal_line.to_numpy()
+
+    df['custom_macd']              = macd_line
+    df['custom_macd_signal']       = signal_line
+    df['custom_macd_hist']         = hist
+    df['custom_macd_hist_color']   = hist_color
+    df['custom_macd_momentum']     = _calc_momentum(macd_arr)
+    df['custom_macd_sig_momentum'] = _calc_momentum(signal_arr)
+
     return df
