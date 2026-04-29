@@ -116,23 +116,50 @@ class ExitMonitor:
     async def _get_current_meta(self, symbol: str) -> tuple[float, dict]:
         """
         Lấy giá hiện tại và metadata strategy mới nhất cho symbol.
+        Ưu tiên fetch OHLCV mới để tính indicator, fallback về cache signal.
         Returns: (current_price, metadata_dict)
         """
         from src.core.bot_engine import _normalize_symbol
+        from src.data.indicators import add_custom_sma_to_df
+        import pandas as pd
+
         trading_symbol = _normalize_symbol(symbol)
 
-        # Lấy signal mới nhất từ cache của engine
-        cached = self.engine._last_signals.get(trading_symbol)
-        meta = dict(cached.metadata or {}) if cached else {}
-
         # Lấy giá ticker
+        current_price = 0.0
         try:
             ticker = await self.engine.exchange.fetch_ticker(trading_symbol)
-            price = ticker["last"]
+            current_price = ticker["last"]
         except Exception:
-            price = meta.get("price", 0) or 0
+            pass
 
-        return price, meta
+        # Thử lấy metadata từ OHLCV mới nhất để có trend/momentum chính xác
+        try:
+            ohlcv = await self.engine.exchange.fetch_ohlcv(
+                trading_symbol, self.engine.timeframe, 60
+            )
+            if ohlcv and len(ohlcv) >= 10:
+                df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                df = add_custom_sma_to_df(df)
+                if not current_price:
+                    current_price = float(df["close"].iloc[-1])
+
+                meta = {
+                    "trend": int(df["custom_sma_trend"].iloc[-1]),
+                    "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
+                    "momentum": str(df["custom_sma_momentum"].iloc[-1]),
+                    "slope_pct": float(df["custom_sma_slope_pct"].iloc[-1]),
+                    "momentum_pct": float(df["custom_sma_momentum_pct"].iloc[-1]),
+                    "is_sideway": abs(float(df["custom_sma_slope_pct"].iloc[-1])) < self.engine.parameters.get("sideway_slope_threshold", 0.01),
+                }
+                return current_price, meta
+        except Exception as e:
+            self.log.debug(f"ExitMonitor _get_current_meta fallback to cache: {e}")
+
+        # Fallback: dùng cache signal
+        cached = self.engine._last_signals.get(trading_symbol)
+        meta = dict(cached.metadata or {}) if cached else {}
+        return current_price, meta
 
     async def _check_open_trades(self, positions: list):
         """Kiểm tra các Trade đang mở, đóng nếu điều kiện exit thỏa."""
@@ -257,7 +284,7 @@ class ExitMonitor:
                     continue
 
                 # Merge metadata từ opportunity với metadata mới nhất
-                merged_meta = dict(opp.signal_metadata or {})
+                merged_meta = dict(opp.metadata or {})
                 merged_meta.update(meta)  # metadata mới nhất override
 
                 should_exit, reason = _check_exit_condition(
