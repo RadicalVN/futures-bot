@@ -261,5 +261,7 @@ class SmaMacdCrossStrategy(BaseStrategy):
                 "close": round(float(close_curr), 6),
                 "trend": int(df["custom_sma_trend"].iloc[-1]),
                 "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
+                "momentum": ma_color_curr,   # dùng ma_color làm momentum để hiển thị log
+                "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
             }
         )

@@ -293,7 +293,7 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
         BULLISH = {"blue", "green"}
         BEARISH = {"red", "orange"}
 
-        if signal_type == "long" or (not signal_type and trend == 1):
+        if signal == "long" or (not signal and trend == 1):
             # Điều kiện 1: Signal chuyển từ bearish → bullish/reversal
             if sig_color in BULLISH | {"purple"}:
                 met.append(f"✅ MACD-Signal chuyển {sig_color} (từ bearish)")
