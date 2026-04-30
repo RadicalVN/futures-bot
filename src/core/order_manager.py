@@ -151,39 +151,82 @@ class OrderManager:
             return False
 
     async def _handle_exit(self, signal: StrategySignal, positions: list) -> bool:
-        """Đóng vị thế"""
-        symbol = signal.symbol
+        """Đóng vị thế theo chế độ cách ly (isolated per-trade).
         
-        # Tìm vị thế cần đóng
-        position = None
+        Dùng trade.amount từ DB thay vì toàn bộ position size từ exchange,
+        đảm bảo mỗi bot chỉ đóng đúng phần lệnh của mình.
+        """
+        symbol = signal.symbol
+        bot_id = getattr(self, 'bot_id', None)
+
+        # Lấy Trade record từ DB để biết đúng amount của bot này
+        trade_record = None
+        async with get_db() as db:
+            query = (
+                select(Trade)
+                .where(
+                    Trade.symbol == symbol,
+                    Trade.status == "filled",
+                    Trade.closed_at == None,
+                )
+            )
+            if bot_id:
+                query = query.where(Trade.bot_id == bot_id)
+            query = query.order_by(Trade.created_at.desc()).limit(1)
+            result = await db.execute(query)
+            trade_record = result.scalar_one_or_none()
+
+        # Lấy pos_side từ exchange (cần biết hướng để đóng đúng chiều)
+        pos_side = "long"  # fallback
+        exchange_amount = None
         for pos in positions:
             pos_symbol = pos.get("symbol", "").replace("/", "")
             sig_symbol = symbol.replace("/", "")
             if pos_symbol == sig_symbol:
-                position = pos
+                pos_side = pos.get("side", "long")
+                exchange_amount = abs(float(pos.get("size", 0)))
                 break
 
-        if not position:
+        if exchange_amount is None or exchange_amount <= 0:
             logger.warning(f"Không tìm thấy vị thế để đóng: {symbol}")
             return False
 
-        pos_side = position.get("side", "long")
-        amount = abs(position.get("size", 0))
-
-        if amount <= 0:
-            return False
+        # Dùng trade.amount (isolated), fallback về exchange amount nếu không có record
+        if trade_record and trade_record.amount and trade_record.amount > 0:
+            amount = trade_record.amount
+            # Cap lại nếu vượt quá remaining position (partial fill, manual close, ...)
+            if amount > exchange_amount:
+                logger.warning(
+                    f"[Exit] trade amount={amount} > exchange position={exchange_amount} "
+                    f"cho {symbol}, cap lại về {exchange_amount}"
+                )
+                amount = exchange_amount
+        else:
+            # Không có trade record → fallback về exchange amount (backward compat)
+            logger.warning(
+                f"[Exit] Không tìm thấy trade record cho {symbol} bot#{bot_id}, "
+                f"dùng exchange amount={exchange_amount}"
+            )
+            amount = exchange_amount
 
         try:
             order = await self.exchange.close_position(symbol, pos_side, amount)
-            logger.info(f"✅ Đã đóng vị thế {pos_side.upper()} {symbol}")
-            await self._update_closed_trade(symbol, order)
+            logger.info(
+                f"✅ Đã đóng vị thế {pos_side.upper()} {symbol} | "
+                f"amount={amount} (isolated) | bot#{bot_id}"
+            )
+            # Cập nhật đúng trade record của bot này
+            if trade_record:
+                await self._update_closed_trade_by_id(trade_record.id, order)
+            else:
+                await self._update_closed_trade(symbol, order)
 
             pnl = order.get("info", {}).get("realizedPnl", "0")
             close_price = order.get("average", signal.price)
 
             # Thông báo Discord
             embed = build_exit_embed(
-                bot_id=getattr(self, 'bot_id', '?'),
+                bot_id=bot_id or '?',
                 signal_type=signal.signal,
                 symbol=symbol,
                 close_price=close_price,
@@ -262,7 +305,7 @@ class OrderManager:
             db.add(trade)
 
     async def _update_closed_trade(self, symbol: str, order: dict):
-        """Cập nhật trade khi đóng vị thế"""
+        """Cập nhật trade khi đóng vị thế (fallback — tìm theo symbol)"""
         async with get_db() as db:
             # Tìm trade mở gần nhất cho symbol này
             result = await db.execute(
@@ -282,7 +325,34 @@ class OrderManager:
             if trade:
                 trade.status = "closed"
                 trade.closed_at = datetime.utcnow()
-                trade.realized_pnl = pnl  # ← lưu PnL vào Trade record
+                trade.realized_pnl = pnl
+
+            # Update bot stats
+            if getattr(self, 'bot_id', None):
+                result2 = await db.execute(select(Bot).where(Bot.id == self.bot_id))
+                bot = result2.scalar_one_or_none()
+                if bot:
+                    bot.total_pnl += pnl
+                    if pnl > 0:
+                        bot.winning_trades += 1
+                    elif pnl < 0:
+                        bot.losing_trades += 1
+
+    async def _update_closed_trade_by_id(self, trade_id: int, order: dict):
+        """Cập nhật trade khi đóng vị thế — theo trade ID cụ thể (isolated mode)"""
+        pnl_raw = order.get("info", {}).get("realizedPnl", 0)
+        try:
+            pnl = float(pnl_raw)
+        except (ValueError, TypeError):
+            pnl = 0.0
+
+        async with get_db() as db:
+            result = await db.execute(select(Trade).where(Trade.id == trade_id))
+            trade = result.scalar_one_or_none()
+            if trade:
+                trade.status = "closed"
+                trade.closed_at = datetime.utcnow()
+                trade.realized_pnl = pnl
 
             # Update bot stats
             if getattr(self, 'bot_id', None):

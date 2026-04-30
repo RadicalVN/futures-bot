@@ -269,22 +269,55 @@ class ExitMonitor:
                 self.log.error(f"❌ ExitMonitor check trade #{trade.id}: {e}")
 
     async def _execute_exit(self, trade: Trade, current_price: float, reason: str, positions: list):
-        """Thực thi đóng lệnh và cập nhật DB."""
+        """Thực thi đóng lệnh và cập nhật DB.
+        
+        Dùng trade.amount (lưu trong DB) thay vì lấy toàn bộ position size từ exchange.
+        Điều này đảm bảo chế độ cách ly: mỗi lệnh chỉ đóng đúng phần của nó,
+        không ảnh hưởng đến lệnh của bot khác cùng symbol.
+        """
         from src.core.bot_engine import _normalize_symbol
         trading_symbol = _normalize_symbol(trade.symbol)
 
-        # Tìm position trên exchange
-        pos_side = trade.signal_type  # "long" | "short"
-        amount = None
+        # Lấy pos_side từ exchange (cần biết hướng để đóng đúng chiều)
+        # Nhưng dùng trade.amount từ DB — không dùng total position size từ exchange
+        pos_side = trade.signal_type  # "long" | "short" — fallback từ trade record
+        exchange_amount = None
         for pos in positions:
             sym_clean = pos.get("symbol", "").replace("/", "").replace(":USDT", "")
             if sym_clean == trade.symbol.replace("/", "").replace(":USDT", ""):
-                amount = abs(float(pos.get("size", pos.get("contracts", 0))))
                 pos_side = pos.get("side", pos_side)
+                exchange_amount = abs(float(pos.get("size", pos.get("contracts", 0))))
                 break
 
-        if not amount:
-            self.log.warning(f"ExitMonitor: Không tìm thấy position {trade.symbol} trên exchange")
+        # Dùng trade.amount (isolated per-trade), không dùng toàn bộ position
+        amount = trade.amount
+        if not amount or amount <= 0:
+            self.log.warning(
+                f"ExitMonitor: trade #{trade.id} không có amount hợp lệ ({amount}), bỏ qua"
+            )
+            return
+
+        # Edge case: nếu trade.amount > remaining position (partial fill, manual close, ...)
+        # → cap lại để tránh lỗi "insufficient position"
+        if exchange_amount is not None and amount > exchange_amount:
+            self.log.warning(
+                f"ExitMonitor: trade #{trade.id} amount={amount} > exchange position={exchange_amount}, "
+                f"cap lại về {exchange_amount}"
+            )
+            amount = exchange_amount
+
+        if exchange_amount is None:
+            self.log.warning(
+                f"ExitMonitor: Không tìm thấy position {trade.symbol} trên exchange "
+                f"(có thể đã đóng thủ công). Đánh dấu closed trong DB."
+            )
+            # Đánh dấu closed trong DB dù không có lệnh exchange
+            async with get_db() as db:
+                result = await db.execute(select(Trade).where(Trade.id == trade.id))
+                t = result.scalar_one_or_none()
+                if t:
+                    t.status = "closed"
+                    t.closed_at = datetime.utcnow()
             return
 
         try:
