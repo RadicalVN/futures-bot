@@ -88,29 +88,54 @@ def _check_exit_condition(
         sig_color  = ohlcv_meta.get("sig_color", "")
         macd_color = ohlcv_meta.get("macd_color", "")
         close_val  = ohlcv_meta.get("close", current_price)
-        ma_val     = ohlcv_meta.get("ma", 0)
+        high_val   = ohlcv_meta.get("high", current_price)
+        low_val    = ohlcv_meta.get("low", current_price)
+        ma_val     = float(ohlcv_meta.get("ma", 0) or 0)
 
-        BULLISH = {"blue", "green"}
-        BEARISH = {"red", "orange"}
+        # Metadata từ lúc entry — dùng cho TH1
+        ma_cross_price    = float(ohlcv_meta.get("ma_cross_price", entry_price) or entry_price)
+        entry_deviation   = float(ohlcv_meta.get("entry_deviation", 0) or 0)
+
+        SIG_BULLISH = {"blue", "green"}
+        SIG_BEARISH = {"red", "orange"}
 
         if signal_type == "long":
-            if ma_val and close_val < ma_val:
-                return True, f"📉 Giá đóng cửa dưới MA ({close_val:.4f} < {ma_val:.4f})"
-            if ma_color in BEARISH:
-                return True, f"📉 MA chuyển {ma_color}"
-            if sig_color in BEARISH:
-                return True, f"📉 MACD-Signal chuyển {sig_color}"
+            # TH2 (ưu tiên): MACD-Signal chuyển đỏ/cam → đóng ngay
+            if sig_color in SIG_BEARISH:
+                return True, f"📉 TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
+
+            # TH3 (ưu tiên): MACD đỏ + MA xanh lá → phân kỳ giảm → đóng ngay
             if macd_color == "red" and ma_color == "green":
-                return True, f"📉 MACD đỏ + MA xanh lá (phân kỳ giảm)"
+                return True, f"📉 TH3: MACD đỏ + MA xanh lá (phân kỳ giảm) → đóng ngay"
+
+            # TH1 (có chọn lọc): close < MA VÀ close < (ma_cross_price + deviation)
+            if ma_val and close_val < ma_val:
+                threshold = ma_cross_price + entry_deviation
+                if close_val < threshold:
+                    close_price_est = (low_val + ma_val) / 2
+                    return True, (
+                        f"📉 TH1: close={close_val:.4f} < MA={ma_val:.4f} "
+                        f"và < ngưỡng={threshold:.4f} | Giá đóng≈{close_price_est:.4f}"
+                    )
+
         elif signal_type == "short":
-            if ma_val and close_val > ma_val:
-                return True, f"📈 Giá đóng cửa trên MA ({close_val:.4f} > {ma_val:.4f})"
-            if ma_color in BULLISH:
-                return True, f"📈 MA chuyển {ma_color}"
-            if sig_color in BULLISH:
-                return True, f"📈 MACD-Signal chuyển {sig_color}"
+            # TH2 (ưu tiên): MACD-Signal chuyển xanh lá/xanh dương → đóng ngay
+            if sig_color in SIG_BULLISH:
+                return True, f"📈 TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
+
+            # TH3 (ưu tiên): MACD xanh dương + MA cam → phân kỳ tăng → đóng ngay
             if macd_color == "blue" and ma_color == "orange":
-                return True, f"📈 MACD xanh dương + MA cam (phân kỳ tăng)"
+                return True, f"📈 TH3: MACD xanh dương + MA cam (phân kỳ tăng) → đóng ngay"
+
+            # TH1 (có chọn lọc): close > MA VÀ close > (ma_cross_price + deviation)
+            if ma_val and close_val > ma_val:
+                threshold = ma_cross_price + entry_deviation
+                if close_val > threshold:
+                    close_price_est = (high_val + ma_val) / 2
+                    return True, (
+                        f"📈 TH1: close={close_val:.4f} > MA={ma_val:.4f} "
+                        f"và > ngưỡng={threshold:.4f} | Giá đóng≈{close_price_est:.4f}"
+                    )
 
     return False, ""
 
@@ -214,6 +239,8 @@ class ExitMonitor:
                         meta["macd"]       = float(mac_arr[i])
                         meta["macd_signal"] = float(sig_arr[i])
                         meta["close"]      = float(df["close"].iloc[-1])
+                        meta["high"]       = float(df["high"].iloc[-1])
+                        meta["low"]        = float(df["low"].iloc[-1])
                     except Exception as e_macd:
                         self.log.debug(f"ExitMonitor MACD meta error: {e_macd}")
 
@@ -249,6 +276,17 @@ class ExitMonitor:
                 current_price, meta = await self._get_current_meta(trade.symbol)
                 if not current_price:
                     continue
+
+                # Merge trade entry metadata vào meta hiện tại
+                # Quan trọng cho sma_macd_cross TH1: cần entry_deviation và ma_cross_price
+                # signal_metadata được lưu lúc entry trong EntryOpportunity hoặc Trade
+                trade_meta = {}
+                if hasattr(trade, 'signal_metadata') and trade.signal_metadata:
+                    trade_meta = dict(trade.signal_metadata) if isinstance(trade.signal_metadata, dict) else {}
+                # Các field entry-time không bị override bởi meta hiện tại
+                for key in ("entry_deviation", "ma_cross_price"):
+                    if key in trade_meta and key not in meta:
+                        meta[key] = trade_meta[key]
 
                 should_exit, reason = _check_exit_condition(
                     strategy_name=trade.strategy or self.engine.strategy_name,

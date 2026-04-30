@@ -53,3 +53,26 @@ for sql in migrations:
 conn.commit()
 conn.close()
 print("\nMigration hoàn tất.")
+
+
+# ── Migration 2: thêm signal_metadata vào trades ─────────────────────────────
+conn2 = sqlite3.connect('data/trading.db')
+cur2 = conn2.cursor()
+
+migrations_v2 = [
+    "ALTER TABLE trades ADD COLUMN signal_metadata JSON DEFAULT '{}'",
+]
+
+for sql in migrations_v2:
+    try:
+        cur2.execute(sql.strip())
+        print(f"✅ OK: {sql.strip()[:80]}...")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+            print(f"⏭️  Skip (already exists): {sql.strip()[:80]}...")
+        else:
+            print(f"❌ Error: {e} | SQL: {sql.strip()[:80]}...")
+
+conn2.commit()
+conn2.close()
+print("Migration 2 hoàn tất.")

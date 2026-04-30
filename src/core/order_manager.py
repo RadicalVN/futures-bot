@@ -278,6 +278,7 @@ class OrderManager:
                 stop_loss=plan.stop_loss,
                 take_profit=plan.take_profit,
                 strategy=self.strategy_name,
+                signal_metadata=signal.metadata if isinstance(signal.metadata, dict) else {},
             )
             db.add(trade)
 

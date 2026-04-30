@@ -1,29 +1,33 @@
 """
 sma_macd_cross.py — Chiến lược: SMA + MACD Cross (TuanTV1008)
 
-Entry LONG khi đủ 3 điều kiện:
-  1. MACD-Signal chuyển từ đỏ/cam → tím/xanh lá/xanh dương (momentum đảo chiều lên)
-  2. MACD cắt qua MACD-Signal từ dưới lên (golden cross)
-  3. Nến đóng cửa phía trên đường MA (giá cắt qua MA từ dưới lên)
-  → Giá vào tiệm cận đường MA
+Implement theo "Phần 2 — Mô tả theo ngôn ngữ trader" trong docs/sma_macd_cross_strategy.md
 
-Exit LONG khi:
-  - Nến đóng cửa dưới MA
-  - MA chuyển đỏ hoặc cam (slope âm)
-  - MACD-Signal chuyển đỏ hoặc cam
-  - MACD đỏ trong khi MA xanh lá (phân kỳ giảm)
+─── ENTRY LONG ───────────────────────────────────────────────────────────────
+  Điều kiện 1: MACD-Signal đang màu xanh lá HOẶC xanh dương
+  Điều kiện 2: MACD đang hoặc đã cắt lên trên Signal (macd >= signal)
+  Điều kiện 3: Nến đóng cửa trên MA (giá cắt qua MA từ dưới lên)
+  → Giá vào = (high_curr + ma_curr) / 2
+  → Lưu độ lệch = |giá vào - ma_curr|
 
-Entry SHORT khi đủ 3 điều kiện:
-  1. MACD-Signal chuyển từ xanh dương/xanh lá → tím/đỏ/cam (momentum đảo chiều xuống)
-  2. MACD cắt qua MACD-Signal từ trên xuống (death cross)
-  3. Nến đóng cửa phía dưới đường MA (giá cắt qua MA từ trên xuống)
-  → Giá vào tiệm cận đường MA
+─── EXIT LONG ────────────────────────────────────────────────────────────────
+  TH1 (có chọn lọc): close < MA VÀ close < (ma_cross_price + entry_deviation)
+      → Đóng với giá = (low_curr + ma_curr) / 2
+  TH2 (ngay lập tức): MACD-Signal chuyển đỏ hoặc cam
+  TH3 (ngay lập tức): MACD màu đỏ VÀ MA màu xanh lá
 
-Exit SHORT khi:
-  - Nến đóng cửa trên MA
-  - MA chuyển xanh dương hoặc xanh lá (slope dương)
-  - MACD-Signal chuyển xanh dương hoặc xanh lá
-  - MACD xanh dương trong khi MA cam (phân kỳ tăng)
+─── ENTRY SHORT ──────────────────────────────────────────────────────────────
+  Điều kiện 1: MACD-Signal đang màu cam HOẶC đỏ
+  Điều kiện 2: MACD đang hoặc đã cắt xuống dưới Signal (macd <= signal)
+  Điều kiện 3: Nến đóng cửa dưới MA (giá cắt qua MA từ trên xuống)
+  → Giá vào = (low_curr + ma_curr) / 2
+  → Lưu độ lệch = |giá vào - ma_curr|
+
+─── EXIT SHORT ───────────────────────────────────────────────────────────────
+  TH1 (có chọn lọc): close > MA VÀ close > (ma_cross_price + entry_deviation)
+      → Đóng với giá = (high_curr + ma_curr) / 2
+  TH2 (ngay lập tức): MACD-Signal chuyển xanh lá hoặc xanh dương
+  TH3 (ngay lập tức): MACD màu xanh dương VÀ MA màu cam
 """
 import pandas as pd
 import numpy as np
@@ -31,26 +35,21 @@ from src.strategies.base_strategy import BaseStrategy, StrategySignal
 from src.data.indicators import add_custom_sma_to_df, add_custom_macd_to_df
 
 
-# ── Nhóm màu momentum ─────────────────────────────────────────────────────────
-# Màu "đang tăng" (slope dương)
-MA_BULLISH   = {"blue", "green"}      # xanh dương (tăng tốc) + xanh lá (giảm tốc nhưng vẫn lên)
-# Màu "đang giảm" (slope âm)
-MA_BEARISH   = {"red", "orange"}      # đỏ (tăng tốc xuống) + cam (giảm tốc xuống)
-# Màu "đảo chiều / trung tính"
-MA_REVERSAL  = {"purple", "yellow"}
-
-# Màu signal momentum — dùng hàm _slope_color tương tự chart.js
-# Tính từ 3 điểm liên tiếp của signal line
+# ── Nhóm màu ──────────────────────────────────────────────────────────────────
+SIG_BULLISH = {"blue", "green"}    # MACD-Signal tích cực → điều kiện entry LONG
+SIG_BEARISH = {"red", "orange"}    # MACD-Signal tiêu cực → điều kiện entry SHORT
+MA_BULLISH  = {"blue", "green"}    # MA đang tăng
+MA_BEARISH  = {"red", "orange"}    # MA đang giảm
 
 
 def _slope_color(curr: float, prev: float, older: float) -> str:
     """
-    Tính màu slope giống rule chart.js slopeColor:
-    - curr > prev + tăng tốc → blue
-    - curr > prev + giảm tốc → green
-    - curr < prev + tăng tốc → red
-    - curr < prev + giảm tốc → orange
-    - curr == prev           → yellow
+    Tính màu slope từ 3 điểm liên tiếp — giống rule chart.js slopeColor:
+      curr > prev + tăng tốc  → blue
+      curr > prev + giảm tốc  → green
+      curr < prev + tăng tốc  → red
+      curr < prev + giảm tốc  → orange
+      curr == prev            → yellow
     """
     if curr == prev:
         return "yellow"
@@ -60,6 +59,15 @@ def _slope_color(curr: float, prev: float, older: float) -> str:
         return "blue" if slope_curr >= slope_prev else "green"
     else:
         return "red" if slope_curr <= slope_prev else "orange"
+
+
+def _find_ma_cross_price(df: pd.DataFrame, signal_type: str) -> float:
+    """
+    Tìm giá MA tại điểm giao nhau gần nhất của MA với đường giá.
+    Với nến entry (nến cuối), điểm giao nhau chính là ma_curr vì giá vừa cắt qua MA.
+    Trả về giá trị MA tại nến entry.
+    """
+    return float(df["custom_sma_basis"].iloc[-1])
 
 
 class SmaMacdCrossStrategy(BaseStrategy):
@@ -115,66 +123,80 @@ class SmaMacdCrossStrategy(BaseStrategy):
             src=self.macd_src, sig_type=self.macd_sig_type,
         )
 
-        # ── Lấy giá trị hiện tại và trước đó ─────────────────────────────────
-        close_curr  = df["close"].iloc[-1]
-        close_prev  = df["close"].iloc[-2]
+        # ── Lấy giá trị hiện tại ─────────────────────────────────────────────
+        close_curr  = float(df["close"].iloc[-1])
+        close_prev  = float(df["close"].iloc[-2])
+        high_curr   = float(df["high"].iloc[-1])
+        low_curr    = float(df["low"].iloc[-1])
 
-        ma_curr     = df["custom_sma_basis"].iloc[-1]
-        ma_prev     = df["custom_sma_basis"].iloc[-2]
-        ma_older    = df["custom_sma_basis"].iloc[-3]
+        ma_curr     = float(df["custom_sma_basis"].iloc[-1])
+        ma_prev     = float(df["custom_sma_basis"].iloc[-2])
+        ma_older    = float(df["custom_sma_basis"].iloc[-3])
 
-        macd_curr   = df["custom_macd"].iloc[-1]
-        macd_prev   = df["custom_macd"].iloc[-2]
-        macd_older  = df["custom_macd"].iloc[-3]
+        macd_curr   = float(df["custom_macd"].iloc[-1])
+        macd_prev   = float(df["custom_macd"].iloc[-2])
+        macd_older  = float(df["custom_macd"].iloc[-3])
 
-        sig_curr    = df["custom_macd_signal"].iloc[-1]
-        sig_prev    = df["custom_macd_signal"].iloc[-2]
-        sig_older   = df["custom_macd_signal"].iloc[-3]
+        sig_curr    = float(df["custom_macd_signal"].iloc[-1])
+        sig_prev    = float(df["custom_macd_signal"].iloc[-2])
+        sig_older   = float(df["custom_macd_signal"].iloc[-3])
 
         # ── Tính màu slope ────────────────────────────────────────────────────
-        ma_color_curr  = _slope_color(ma_curr,  ma_prev,  ma_older)
-        ma_color_prev  = _slope_color(ma_prev,  ma_older, df["custom_sma_basis"].iloc[-4])
+        ma_color    = _slope_color(ma_curr,   ma_prev,   ma_older)
+        sig_color   = _slope_color(sig_curr,  sig_prev,  sig_older)
+        macd_color  = _slope_color(macd_curr, macd_prev, macd_older)
 
-        sig_color_curr = _slope_color(sig_curr, sig_prev, sig_older)
-        sig_color_prev = _slope_color(sig_prev, sig_older, df["custom_macd_signal"].iloc[-4])
-
-        macd_color_curr = _slope_color(macd_curr, macd_prev, macd_older)
-
-        # ── Xác định vị thế hiện tại ──────────────────────────────────────────
+        # ── Xác định vị thế hiện tại của bot này ─────────────────────────────
         pos_side = None
+        pos_entry_price = 0.0
+        pos_entry_deviation = 0.0
+        pos_ma_cross_price = 0.0
+
         for pos in current_positions:
             pos_sym = pos.get("symbol", "").replace("/", "")
             if pos_sym == symbol.replace("/", ""):
                 pos_side = pos.get("side", "")
+                pos_entry_price = float(pos.get("entry_price", 0) or 0)
+                # Lấy metadata từ position nếu có (được lưu khi entry)
+                meta = pos.get("metadata", {}) or {}
+                pos_entry_deviation = float(meta.get("entry_deviation", 0) or 0)
+                pos_ma_cross_price  = float(meta.get("ma_cross_price", pos_entry_price) or pos_entry_price)
                 break
 
         final_signal = "none"
         reason = (
-            f"Chờ | MA={ma_color_curr} | Sig={sig_color_curr} | "
-            f"MACD={macd_color_curr} | Close={'trên' if close_curr > ma_curr else 'dưới'} MA"
+            f"Chờ | MA={ma_color} | Sig={sig_color} | "
+            f"MACD={macd_color} | Close={'trên' if close_curr > ma_curr else 'dưới'} MA"
         )
+        exit_price = close_curr  # giá đóng lệnh mặc định
 
         # ══════════════════════════════════════════════════════════════════════
-        # EXIT LOGIC (ưu tiên kiểm tra trước)
+        # EXIT LOGIC — kiểm tra trước entry
         # ══════════════════════════════════════════════════════════════════════
         if pos_side == "long":
             exit_reason = None
 
-            # 1. Nến đóng cửa dưới MA
-            if close_curr < ma_curr:
-                exit_reason = f"Đóng LONG: Giá đóng cửa dưới MA ({close_curr:.4f} < {ma_curr:.4f})"
+            # TH2 (ưu tiên cao): MACD-Signal chuyển đỏ hoặc cam → đóng ngay
+            if sig_color in SIG_BEARISH:
+                exit_reason = f"Đóng LONG TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
+                exit_price = close_curr
 
-            # 2. MA chuyển đỏ hoặc cam
-            elif ma_color_curr in MA_BEARISH:
-                exit_reason = f"Đóng LONG: MA chuyển {ma_color_curr}"
+            # TH3 (ưu tiên cao): MACD đỏ + MA xanh lá → phân kỳ giảm → đóng ngay
+            elif macd_color == "red" and ma_color == "green":
+                exit_reason = f"Đóng LONG TH3: MACD đỏ + MA xanh lá (phân kỳ giảm) → đóng ngay"
+                exit_price = close_curr
 
-            # 3. MACD-Signal chuyển đỏ hoặc cam
-            elif sig_color_curr in MA_BEARISH:
-                exit_reason = f"Đóng LONG: MACD-Signal chuyển {sig_color_curr}"
-
-            # 4. MACD đỏ trong khi MA xanh lá (phân kỳ giảm)
-            elif macd_color_curr == "red" and ma_color_curr == "green":
-                exit_reason = f"Đóng LONG: MACD đỏ + MA xanh lá (phân kỳ giảm)"
+            # TH1 (có chọn lọc): close < MA VÀ close < (ma_cross_price + deviation)
+            elif close_curr < ma_curr:
+                threshold = pos_ma_cross_price + pos_entry_deviation
+                if close_curr < threshold:
+                    # Giá đóng = trung bình (low, ma_curr)
+                    exit_price = (low_curr + ma_curr) / 2
+                    exit_reason = (
+                        f"Đóng LONG TH1: close={close_curr:.4f} < MA={ma_curr:.4f} "
+                        f"và < ngưỡng={threshold:.4f} (cross={pos_ma_cross_price:.4f} + dev={pos_entry_deviation:.4f})"
+                        f" | Giá đóng ≈ {exit_price:.4f}"
+                    )
 
             if exit_reason:
                 final_signal = "close_long"
@@ -183,21 +205,27 @@ class SmaMacdCrossStrategy(BaseStrategy):
         elif pos_side == "short":
             exit_reason = None
 
-            # 1. Nến đóng cửa trên MA
-            if close_curr > ma_curr:
-                exit_reason = f"Đóng SHORT: Giá đóng cửa trên MA ({close_curr:.4f} > {ma_curr:.4f})"
+            # TH2 (ưu tiên cao): MACD-Signal chuyển xanh lá hoặc xanh dương → đóng ngay
+            if sig_color in SIG_BULLISH:
+                exit_reason = f"Đóng SHORT TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
+                exit_price = close_curr
 
-            # 2. MA chuyển xanh dương hoặc xanh lá
-            elif ma_color_curr in MA_BULLISH:
-                exit_reason = f"Đóng SHORT: MA chuyển {ma_color_curr}"
+            # TH3 (ưu tiên cao): MACD xanh dương + MA cam → phân kỳ tăng → đóng ngay
+            elif macd_color == "blue" and ma_color == "orange":
+                exit_reason = f"Đóng SHORT TH3: MACD xanh dương + MA cam (phân kỳ tăng) → đóng ngay"
+                exit_price = close_curr
 
-            # 3. MACD-Signal chuyển xanh dương hoặc xanh lá
-            elif sig_color_curr in MA_BULLISH:
-                exit_reason = f"Đóng SHORT: MACD-Signal chuyển {sig_color_curr}"
-
-            # 4. MACD xanh dương trong khi MA cam (phân kỳ tăng)
-            elif macd_color_curr == "blue" and ma_color_curr == "orange":
-                exit_reason = f"Đóng SHORT: MACD xanh dương + MA cam (phân kỳ tăng)"
+            # TH1 (có chọn lọc): close > MA VÀ close > (ma_cross_price + deviation)
+            elif close_curr > ma_curr:
+                threshold = pos_ma_cross_price + pos_entry_deviation
+                if close_curr > threshold:
+                    # Giá đóng = trung bình (high, ma_curr)
+                    exit_price = (high_curr + ma_curr) / 2
+                    exit_reason = (
+                        f"Đóng SHORT TH1: close={close_curr:.4f} > MA={ma_curr:.4f} "
+                        f"và > ngưỡng={threshold:.4f} (cross={pos_ma_cross_price:.4f} + dev={pos_entry_deviation:.4f})"
+                        f" | Giá đóng ≈ {exit_price:.4f}"
+                    )
 
             if exit_reason:
                 final_signal = "close_short"
@@ -208,60 +236,132 @@ class SmaMacdCrossStrategy(BaseStrategy):
         # ══════════════════════════════════════════════════════════════════════
         elif pos_side is None:
 
-            # ── LONG: 3 điều kiện ─────────────────────────────────────────────
-            # Điều kiện 1: MACD-Signal chuyển từ đỏ/cam → tím/xanh lá/xanh dương
-            sig_was_bearish = sig_color_prev in MA_BEARISH
-            sig_now_bullish = sig_color_curr in (MA_BULLISH | MA_REVERSAL)
-            cond1_long = sig_was_bearish and sig_now_bullish
+            # ── LONG ──────────────────────────────────────────────────────────
+            # Điều kiện 1: MACD-Signal đang màu xanh lá hoặc xanh dương
+            cond1_long = sig_color in SIG_BULLISH
 
-            # Điều kiện 2: MACD cắt qua Signal từ dưới lên (golden cross)
-            cond2_long = (macd_prev <= sig_prev) and (macd_curr > sig_curr)
+            # Điều kiện 2: MACD đang hoặc đã cắt lên trên Signal (macd >= signal)
+            cond2_long = macd_curr >= sig_curr
 
             # Điều kiện 3: Nến đóng cửa trên MA (giá cắt qua MA từ dưới lên)
+            # close_prev <= ma_prev: nến trước còn dưới MA
+            # close_curr > ma_curr: nến hiện tại đã trên MA
             cond3_long = (close_prev <= ma_prev) and (close_curr > ma_curr)
 
             if cond1_long and cond2_long and cond3_long:
+                # Giá vào = trung bình (high, ma_curr)
+                ma_cross_price = ma_curr
+                entry_price = (high_curr + ma_cross_price) / 2
+                entry_deviation = abs(entry_price - ma_cross_price)
+
                 final_signal = "long"
                 reason = (
-                    f"Mở LONG: Signal {sig_color_prev}→{sig_color_curr} | "
-                    f"MACD golden cross | Giá cắt lên MA ({close_curr:.4f}>{ma_curr:.4f})"
+                    f"Mở LONG: Sig={sig_color} (bullish) | "
+                    f"MACD={macd_curr:.6f} ≥ Signal={sig_curr:.6f} | "
+                    f"Giá cắt lên MA ({close_curr:.4f}>{ma_curr:.4f}) | "
+                    f"Giá vào≈{entry_price:.4f} | Dev={entry_deviation:.4f}"
+                )
+                return StrategySignal(
+                    signal=final_signal,
+                    symbol=symbol,
+                    price=entry_price,
+                    reason=reason,
+                    metadata={
+                        "ma_color": ma_color,
+                        "sig_color": sig_color,
+                        "macd_color": macd_color,
+                        "ma": round(ma_curr, 6),
+                        "macd": round(macd_curr, 8),
+                        "macd_signal": round(sig_curr, 8),
+                        "close": round(close_curr, 6),
+                        "ma_cross_price": round(ma_cross_price, 6),
+                        "entry_deviation": round(entry_deviation, 6),
+                        "trend": int(df["custom_sma_trend"].iloc[-1]),
+                        "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
+                        "momentum": ma_color,
+                        "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
+                    }
                 )
 
-            # ── SHORT: 3 điều kiện ────────────────────────────────────────────
-            # Điều kiện 1: MACD-Signal chuyển từ xanh dương/xanh lá → tím/đỏ/cam
-            sig_was_bullish = sig_color_prev in MA_BULLISH
-            sig_now_bearish = sig_color_curr in (MA_BEARISH | MA_REVERSAL)
-            cond1_short = sig_was_bullish and sig_now_bearish
+            # ── SHORT ─────────────────────────────────────────────────────────
+            # Điều kiện 1: MACD-Signal đang màu cam hoặc đỏ
+            cond1_short = sig_color in SIG_BEARISH
 
-            # Điều kiện 2: MACD cắt qua Signal từ trên xuống (death cross)
-            cond2_short = (macd_prev >= sig_prev) and (macd_curr < sig_curr)
+            # Điều kiện 2: MACD đang hoặc đã cắt xuống dưới Signal (macd <= signal)
+            cond2_short = macd_curr <= sig_curr
 
             # Điều kiện 3: Nến đóng cửa dưới MA (giá cắt qua MA từ trên xuống)
+            # close_prev >= ma_prev: nến trước còn trên MA
+            # close_curr < ma_curr: nến hiện tại đã dưới MA
             cond3_short = (close_prev >= ma_prev) and (close_curr < ma_curr)
 
             if cond1_short and cond2_short and cond3_short:
+                # Giá vào = trung bình (low, ma_curr)
+                ma_cross_price = ma_curr
+                entry_price = (low_curr + ma_cross_price) / 2
+                entry_deviation = abs(entry_price - ma_cross_price)
+
                 final_signal = "short"
                 reason = (
-                    f"Mở SHORT: Signal {sig_color_prev}→{sig_color_curr} | "
-                    f"MACD death cross | Giá cắt xuống MA ({close_curr:.4f}<{ma_curr:.4f})"
+                    f"Mở SHORT: Sig={sig_color} (bearish) | "
+                    f"MACD={macd_curr:.6f} ≤ Signal={sig_curr:.6f} | "
+                    f"Giá cắt xuống MA ({close_curr:.4f}<{ma_curr:.4f}) | "
+                    f"Giá vào≈{entry_price:.4f} | Dev={entry_deviation:.4f}"
                 )
+                return StrategySignal(
+                    signal=final_signal,
+                    symbol=symbol,
+                    price=entry_price,
+                    reason=reason,
+                    metadata={
+                        "ma_color": ma_color,
+                        "sig_color": sig_color,
+                        "macd_color": macd_color,
+                        "ma": round(ma_curr, 6),
+                        "macd": round(macd_curr, 8),
+                        "macd_signal": round(sig_curr, 8),
+                        "close": round(close_curr, 6),
+                        "ma_cross_price": round(ma_cross_price, 6),
+                        "entry_deviation": round(entry_deviation, 6),
+                        "trend": int(df["custom_sma_trend"].iloc[-1]),
+                        "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
+                        "momentum": ma_color,
+                        "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
+                    }
+                )
+
+            # Log chi tiết khi chờ — hiển thị từng điều kiện để dễ trace
+            if not cond1_long and not cond1_short:
+                wait_detail = f"Sig={sig_color} (cần blue/green cho LONG, red/orange cho SHORT)"
+            elif cond1_long and not cond2_long:
+                wait_detail = f"Sig={sig_color}✓ | MACD({macd_curr:.6f}) < Signal({sig_curr:.6f}) — chờ golden cross"
+            elif cond1_long and cond2_long and not cond3_long:
+                wait_detail = f"Sig={sig_color}✓ | MACD≥Signal✓ | Giá chưa cắt lên MA (close={close_curr:.4f}, MA={ma_curr:.4f})"
+            elif cond1_short and not cond2_short:
+                wait_detail = f"Sig={sig_color}✓ | MACD({macd_curr:.6f}) > Signal({sig_curr:.6f}) — chờ death cross"
+            elif cond1_short and cond2_short and not cond3_short:
+                wait_detail = f"Sig={sig_color}✓ | MACD≤Signal✓ | Giá chưa cắt xuống MA (close={close_curr:.4f}, MA={ma_curr:.4f})"
+            else:
+                wait_detail = f"MA={ma_color} | Sig={sig_color} | MACD={macd_color}"
+
+            reason = f"Chờ | {wait_detail} | Close={'trên' if close_curr > ma_curr else 'dưới'} MA"
 
         return StrategySignal(
             signal=final_signal,
             symbol=symbol,
-            price=ma_curr if final_signal in ("long", "short") else close_curr,
+            price=exit_price if final_signal in ("close_long", "close_short") else close_curr,
             reason=reason,
             metadata={
-                "ma_color": ma_color_curr,
-                "sig_color": sig_color_curr,
-                "macd_color": macd_color_curr,
-                "ma": round(float(ma_curr), 6),
-                "macd": round(float(macd_curr), 8),
-                "macd_signal": round(float(sig_curr), 8),
-                "close": round(float(close_curr), 6),
+                "ma_color": ma_color,
+                "sig_color": sig_color,
+                "macd_color": macd_color,
+                "ma": round(ma_curr, 6),
+                "macd": round(macd_curr, 8),
+                "macd_signal": round(sig_curr, 8),
+                "close": round(close_curr, 6),
                 "trend": int(df["custom_sma_trend"].iloc[-1]),
                 "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
-                "momentum": ma_color_curr,   # dùng ma_color làm momentum để hiển thị log
+                "momentum": ma_color,
                 "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
             }
         )

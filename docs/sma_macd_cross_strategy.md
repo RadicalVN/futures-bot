@@ -14,11 +14,11 @@
 
 **Exit LONG (ExitMonitor check):**
 - Trường hợp đóng lệnh 1:
- + Điều kiện 1: bắt buộc phải có nến mà giá đóng nến nằm dưới đường MA
- + Điều kiện 2: nếu giá đóng nến của phiên đang xét mà bé hơn tổng của giá tại điểm giao nhau của ma với đường giá + độ lệch giá vào lệnh (không có thì mặc định 0)
- 
-=> thoả 2 điều kiện thì đóng lệnh với giá đóng lệnh là giá trung bình của giá thấp và gần nhất 
-với giá tại điểm giao nhau gần nhất của sma và đường giá.
+  + Điều kiện 1: bắt buộc phải có nến mà giá đóng nến nằm dưới đường MA
+  + Điều kiện 2: nếu giá đóng nến của phiên đang xét mà bé hơn tổng của giá tại điểm giao nhau của ma với đường giá + độ lệch giá vào lệnh (không có thì mặc định 0)
+
+  => thoả 2 điều kiện thì đóng lệnh với giá đóng lệnh là giá trung bình của giá thấp và gần nhất
+  với giá tại điểm giao nhau gần nhất của sma và đường giá.
 
 - Trường hợp đóng lệnh 2: MACD-Signal chuyển đỏ/cam → đóng ngay
 - Trường hợp đóng lệnh 3: có phiên MACD đỏ, MA xanh lá sau điểm vào lệnh → đóng ngay
@@ -28,18 +28,18 @@ với giá tại điểm giao nhau gần nhất của sma và đường giá.
 ### Entry SHORT
 **Điều kiện 1:** MACD-Signal màu cam/đỏ
 **và Điều kiện 2:** MACD phải đang hoặc đã cắt qua MACD-Signal từ trên xuống
-**và Điều kiện 3:** Giá/nến phải cắt qua MA, kết thúc nến giá phải nằm trên MA
+**và Điều kiện 3:** Giá/nến phải cắt qua MA, kết thúc nến giá phải nằm dưới MA
 
-→ Giá mua: là giá trung bình của giá thấp và gần nhất với giá tại điểm giao nhau gần nhất của sma và đường giá
-- độ lệch giá vào lệnh (lưu lại) là giá trị tuyệt đối của giá mua - giá tại điểm giao nhau gần nhất của sma và đường giá.
+→ Giá bán: là giá trung bình của giá thấp và gần nhất với giá tại điểm giao nhau gần nhất của sma và đường giá
+- độ lệch giá vào lệnh (lưu lại) là giá trị tuyệt đối của giá bán - giá tại điểm giao nhau gần nhất của sma và đường giá.
 
-**Exit LONG (ExitMonitor check):**
+**Exit SHORT (ExitMonitor check):**
 - Trường hợp đóng lệnh 1:
- + Điều kiện 1: bắt buộc phải có nến mà giá đóng nến nằm trên đường MA
- + Điều kiện 2: nếu giá đóng nến của phiên đang xét mà lớn hơn tổng của giá tại điểm giao nhau của ma với đường giá + độ lệch giá vào lệnh (không có thì mặc định 0)
- 
-=> thoả 2 điều kiện thì đóng lệnh với giá đóng lệnh là giá trung bình của giá cao và gần nhất 
-với giá tại điểm giao nhau gần nhất của sma và đường giá.
+  + Điều kiện 1: bắt buộc phải có nến mà giá đóng nến nằm trên đường MA
+  + Điều kiện 2: nếu giá đóng nến của phiên đang xét mà lớn hơn tổng của giá tại điểm giao nhau của ma với đường giá + độ lệch giá vào lệnh (không có thì mặc định 0)
+
+  => thoả 2 điều kiện thì đóng lệnh với giá đóng lệnh là giá trung bình của giá cao và gần nhất
+  với giá tại điểm giao nhau gần nhất của sma và đường giá.
 
 - Trường hợp đóng lệnh 2: MACD-Signal chuyển xanh lá/xanh dương → đóng ngay
 - Trường hợp đóng lệnh 3: có phiên MACD xanh dương, MA cam sau điểm vào lệnh → đóng ngay
@@ -49,72 +49,97 @@ với giá tại điểm giao nhau gần nhất của sma và đường giá.
 ## Phần 2 — Mô tả theo ngôn ngữ trader
 
 ### Tổng quan
-Chiến lược kết hợp **đường trung bình động (MA)** và **MACD** để xác nhận điểm vào lệnh với 3 lớp xác nhận độc lập, nhằm giảm thiểu tín hiệu giả. Giá vào lệnh được đặt tiệm cận đường MA — tức là mua/bán ở vùng hỗ trợ/kháng cự động, giúp tối ưu tỷ lệ Risk/Reward.
+
+Chiến lược kết hợp **đường MA (Moving Average)** và **MACD custom** để xác nhận điểm vào lệnh với 3 lớp xác nhận độc lập. Điểm đặc biệt: giá vào lệnh được tính toán tiệm cận điểm giao nhau của giá và MA — tức là vào lệnh sát vùng hỗ trợ/kháng cự động, tối ưu Risk/Reward. Chiến lược lưu lại **độ lệch giá vào** để dùng làm ngưỡng xác nhận khi thoát lệnh.
 
 ---
 
 ### Entry LONG (Mua)
 
-**Bối cảnh:** Thị trường đang trong giai đoạn điều chỉnh (MACD-Signal đang yếu/giảm), chuẩn bị phục hồi.
+**Bối cảnh:** Momentum đang tích cực (MACD-Signal xanh), MACD đã vượt lên trên Signal, và giá vừa phá vỡ MA từ dưới lên.
 
-**3 điều kiện xác nhận:**
+**3 điều kiện phải đồng thời thỏa:**
 
-1. **Momentum MACD-Signal đảo chiều tăng**
-   MACD-Signal đang trong trạng thái suy yếu (giảm tốc hoặc đảo chiều xuống) chuyển sang trạng thái tăng tốc hoặc đảo chiều lên. Đây là dấu hiệu đầu tiên cho thấy lực bán đang cạn kiệt.
+| # | Điều kiện | Ý nghĩa |
+|---|-----------|---------|
+| 1 | MACD-Signal đang màu **xanh lá hoặc xanh dương** | Momentum tổng thể đang tích cực — lực mua đang chiếm ưu thế |
+| 2 | MACD **đang hoặc đã** cắt lên trên Signal (MACD ≥ Signal) | Golden cross đã xảy ra — momentum ngắn hạn mạnh hơn dài hạn |
+| 3 | Nến hiện tại **đóng cửa trên MA** (giá cắt qua MA từ dưới lên) | Giá phá vỡ kháng cự động — xu hướng tăng được xác nhận |
 
-2. **MACD cắt lên Signal (Golden Cross)**
-   Đường MACD cắt lên trên đường Signal — xác nhận momentum ngắn hạn đã mạnh hơn momentum dài hạn, tín hiệu tăng được xác nhận.
+**Giá vào lệnh:**
+- Lấy trung bình của `high` nến hiện tại và giá tại điểm giao nhau gần nhất của MA với đường giá
+- Lưu lại **độ lệch** = `|giá vào - giá giao nhau MA|` để dùng cho điều kiện thoát
 
-3. **Giá phá vỡ và đóng cửa trên MA**
-   Nến hiện tại phá vỡ đường MA từ dưới lên và đóng cửa phía trên — xác nhận giá đã vượt qua ngưỡng kháng cự động, xu hướng tăng được thiết lập.
+**Thoát lệnh LONG — theo thứ tự ưu tiên:**
 
-**Giá vào:** Tiệm cận đường MA (mua gần vùng hỗ trợ động, rủi ro thấp).
+| Trường hợp | Điều kiện | Hành động |
+|-----------|-----------|-----------|
+| **TH1** (có chọn lọc) | Giá đóng cửa **dưới MA** VÀ giá đóng cửa < (giá giao nhau MA + độ lệch) | Đóng với giá = trung bình `low` và giá giao nhau MA gần nhất |
+| **TH2** (ngay lập tức) | MACD-Signal chuyển sang **đỏ hoặc cam** | Đóng ngay theo giá thị trường |
+| **TH3** (ngay lập tức) | MACD màu **đỏ** trong khi MA màu **xanh lá** | Đóng ngay — phân kỳ giảm: momentum ngắn hạn suy yếu trước MA |
 
-**Thoát lệnh LONG — bất kỳ 1 trong 4 điều kiện:**
-
-| Điều kiện | Ý nghĩa |
-|-----------|---------|
-| Giá đóng cửa dưới MA | Giá đã phá vỡ hỗ trợ động — xu hướng tăng thất bại |
-| MA chuyển sang suy yếu (đỏ/cam) | Đường MA đang dốc xuống — xu hướng tăng đang mất đà |
-| MACD-Signal chuyển sang suy yếu | Momentum tổng thể đang đảo chiều xuống |
-| MACD đỏ + MA xanh lá | Phân kỳ giảm: momentum ngắn hạn giảm trong khi MA vẫn tăng nhẹ — cảnh báo sớm đảo chiều |
+> **Lưu ý TH1:** Yêu cầu cả 2 điều kiện — giá dưới MA *và* chưa vượt quá ngưỡng độ lệch. Điều này tránh đóng lệnh quá sớm khi giá chỉ chạm MA rồi bật lại.
 
 ---
 
 ### Entry SHORT (Bán)
 
-**Bối cảnh:** Thị trường đang trong giai đoạn hồi phục (MACD-Signal đang mạnh/tăng), chuẩn bị quay đầu giảm.
+**Bối cảnh:** Momentum đang tiêu cực (MACD-Signal đỏ/cam), MACD đã cắt xuống dưới Signal, và giá vừa phá vỡ MA từ trên xuống.
 
-**3 điều kiện xác nhận:**
+**3 điều kiện phải đồng thời thỏa:**
 
-1. **Momentum MACD-Signal đảo chiều giảm**
-   MACD-Signal đang trong trạng thái tăng tốc chuyển sang suy yếu hoặc đảo chiều xuống. Dấu hiệu đầu tiên cho thấy lực mua đang cạn kiệt.
+| # | Điều kiện | Ý nghĩa |
+|---|-----------|---------|
+| 1 | MACD-Signal đang màu **cam hoặc đỏ** | Momentum tổng thể đang tiêu cực — lực bán đang chiếm ưu thế |
+| 2 | MACD **đang hoặc đã** cắt xuống dưới Signal (MACD ≤ Signal) | Death cross đã xảy ra — momentum ngắn hạn yếu hơn dài hạn |
+| 3 | Nến hiện tại **đóng cửa dưới MA** (giá cắt qua MA từ trên xuống) | Giá phá vỡ hỗ trợ động — xu hướng giảm được xác nhận |
 
-2. **MACD cắt xuống Signal (Death Cross)**
-   Đường MACD cắt xuống dưới đường Signal — xác nhận momentum ngắn hạn đã yếu hơn momentum dài hạn, tín hiệu giảm được xác nhận.
+**Giá vào lệnh:**
+- Lấy trung bình của `low` nến hiện tại và giá tại điểm giao nhau gần nhất của MA với đường giá
+- Lưu lại **độ lệch** = `|giá vào - giá giao nhau MA|` để dùng cho điều kiện thoát
 
-3. **Giá phá vỡ và đóng cửa dưới MA**
-   Nến hiện tại phá vỡ đường MA từ trên xuống và đóng cửa phía dưới — xác nhận giá đã thủng ngưỡng hỗ trợ động, xu hướng giảm được thiết lập.
+**Thoát lệnh SHORT — theo thứ tự ưu tiên:**
 
-**Giá vào:** Tiệm cận đường MA (bán gần vùng kháng cự động, rủi ro thấp).
+| Trường hợp | Điều kiện | Hành động |
+|-----------|-----------|-----------|
+| **TH1** (có chọn lọc) | Giá đóng cửa **trên MA** VÀ giá đóng cửa > (giá giao nhau MA + độ lệch) | Đóng với giá = trung bình `high` và giá giao nhau MA gần nhất |
+| **TH2** (ngay lập tức) | MACD-Signal chuyển sang **xanh lá hoặc xanh dương** | Đóng ngay theo giá thị trường |
+| **TH3** (ngay lập tức) | MACD màu **xanh dương** trong khi MA màu **cam** | Đóng ngay — phân kỳ tăng: momentum ngắn hạn phục hồi trước MA |
 
-**Thoát lệnh SHORT — bất kỳ 1 trong 4 điều kiện:**
-
-| Điều kiện | Ý nghĩa |
-|-----------|---------|
-| Giá đóng cửa trên MA | Giá đã phá vỡ kháng cự động — xu hướng giảm thất bại |
-| MA chuyển sang tăng (xanh dương/xanh lá) | Đường MA đang dốc lên — xu hướng giảm đang mất đà |
-| MACD-Signal chuyển sang tăng | Momentum tổng thể đang đảo chiều lên |
-| MACD xanh dương + MA cam | Phân kỳ tăng: momentum ngắn hạn tăng trong khi MA vẫn giảm nhẹ — cảnh báo sớm đảo chiều |
+> **Lưu ý TH1:** Yêu cầu cả 2 điều kiện — giá trên MA *và* đã vượt quá ngưỡng độ lệch. Tránh đóng lệnh quá sớm khi giá chỉ chạm MA rồi tiếp tục giảm.
 
 ---
 
-### Ưu điểm của chiến lược
+### Điểm giao nhau MA (MA Crossover Price)
 
-- **3 lớp xác nhận** giảm thiểu tín hiệu giả so với dùng đơn lẻ từng chỉ báo
-- **Giá vào tiệm cận MA** — tối ưu điểm vào, SL tự nhiên ngay dưới/trên MA
-- **Exit đa điều kiện** — thoát lệnh sớm khi có dấu hiệu đảo chiều, bảo vệ lợi nhuận
-- **Phân kỳ MACD/MA** — phát hiện sớm điểm yếu của xu hướng trước khi giá đảo chiều hẳn
+Điểm giao nhau gần nhất của MA với đường giá là giá tại nến mà giá đóng cửa vừa cắt qua MA (nến entry hoặc nến gần nhất trước đó có sự giao nhau). Trong thực tế tính toán:
+
+- **LONG**: `ma_cross_price = ma_curr` (giá MA tại nến entry — điểm giá vừa cắt lên)
+- **SHORT**: `ma_cross_price = ma_curr` (giá MA tại nến entry — điểm giá vừa cắt xuống)
+- **Giá vào LONG** = `(high_curr + ma_cross_price) / 2`
+- **Giá vào SHORT** = `(low_curr + ma_cross_price) / 2`
+- **Độ lệch** = `|giá vào - ma_cross_price|`
+
+---
+
+### Màu sắc chỉ báo (Color Coding)
+
+Cả MA và MACD-Signal đều dùng cùng rule màu dựa trên **slope momentum**:
+
+| Màu | Ý nghĩa |
+|-----|---------|
+| 🔵 Xanh dương | Đang tăng và tăng tốc |
+| 🟢 Xanh lá | Đang tăng nhưng giảm tốc |
+| 🟠 Cam | Đang giảm nhưng giảm tốc (sắp đảo chiều?) |
+| 🔴 Đỏ | Đang giảm và tăng tốc |
+| 🟣 Tím | Đảo chiều / trung tính |
+| 🟡 Vàng | Không thay đổi |
+
+**Nhóm màu cho logic chiến lược:**
+- **Bullish** (tích cực): xanh dương, xanh lá
+- **Bearish** (tiêu cực): đỏ, cam
+
+---
 
 ### Tham số chính
 

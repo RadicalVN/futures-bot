@@ -177,6 +177,7 @@ class Trade(Base):
     leverage = Column(Integer, default=1)
     stop_loss = Column(Float)
     take_profit = Column(Float)
+    signal_metadata = Column(JSON, default={})  # metadata từ strategy lúc entry (entry_deviation, ma_cross_price, ...)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
