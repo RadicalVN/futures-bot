@@ -5,30 +5,44 @@
 ## Phần 1 — Mô tả gốc
 
 ### Entry LONG
-**Điều kiện 1:** MACD-Signal chuyển từ đỏ/cam sang tím/xanh lá/xanh dương
-**và Điều kiện 2:** MACD phải cắt qua MACD-Signal từ dưới lên
+**Điều kiện 1:** MACD-Signal màu xanh lá/xanh dương
+**và Điều kiện 2:** MACD phải đang hoặc đã cắt qua MACD-Signal từ dưới lên
 **và Điều kiện 3:** Giá/nến phải cắt qua MA, kết thúc nến giá phải nằm trên MA
-→ Giá mua tiệm cận đường MA
+
+→ Giá mua: là giá trung bình của giá cao và gần nhất với giá tại điểm giao nhau gần nhất của sma và đường giá
+- độ lệch giá vào lệnh (lưu lại) là giá trị tuyệt đối của giá mua - giá tại điểm giao nhau gần nhất của sma và đường giá.
 
 **Exit LONG (ExitMonitor check):**
-- Có nến sau điểm mua kết thúc phiên giá nằm dưới đường MA → đóng ngay
-- Hoặc MA chuyển đỏ/cam → đóng ngay
-- Hoặc MACD-Signal chuyển đỏ/cam → đóng ngay
-- Hoặc có phiên MACD đỏ, MA xanh lá → đóng ngay
+- Trường hợp đóng lệnh 1:
+ + Điều kiện 1: bắt buộc phải có nến mà giá đóng nến nằm dưới đường MA
+ + Điều kiện 2: nếu giá đóng nến của phiên đang xét mà bé hơn tổng của giá tại điểm giao nhau của ma với đường giá + độ lệch giá vào lệnh (không có thì mặc định 0)
+ 
+=> thoả 2 điều kiện thì đóng lệnh với giá đóng lệnh là giá trung bình của giá thấp và gần nhất 
+với giá tại điểm giao nhau gần nhất của sma và đường giá.
+
+- Trường hợp đóng lệnh 2: MACD-Signal chuyển đỏ/cam → đóng ngay
+- Trường hợp đóng lệnh 3: có phiên MACD đỏ, MA xanh lá sau điểm vào lệnh → đóng ngay
 
 ---
 
 ### Entry SHORT
-**Điều kiện 1:** MACD-Signal chuyển từ xanh dương/xanh lá sang tím/đỏ/cam
-**và Điều kiện 2:** MACD phải cắt qua MACD-Signal từ trên xuống
-**và Điều kiện 3:** Giá/nến phải cắt qua MA, kết thúc nến giá phải nằm dưới MA
-→ Giá bán tiệm cận đường MA
+**Điều kiện 1:** MACD-Signal màu cam/đỏ
+**và Điều kiện 2:** MACD phải đang hoặc đã cắt qua MACD-Signal từ trên xuống
+**và Điều kiện 3:** Giá/nến phải cắt qua MA, kết thúc nến giá phải nằm trên MA
 
-**Exit SHORT (ExitMonitor check):**
-- Có nến sau điểm bán kết thúc phiên giá nằm trên đường MA → đóng ngay
-- Hoặc MA chuyển xanh dương/xanh lá → đóng ngay
-- Hoặc MACD-Signal chuyển xanh dương/xanh lá → đóng ngay
-- Hoặc có phiên MACD xanh dương, MA cam → đóng ngay
+→ Giá mua: là giá trung bình của giá thấp và gần nhất với giá tại điểm giao nhau gần nhất của sma và đường giá
+- độ lệch giá vào lệnh (lưu lại) là giá trị tuyệt đối của giá mua - giá tại điểm giao nhau gần nhất của sma và đường giá.
+
+**Exit LONG (ExitMonitor check):**
+- Trường hợp đóng lệnh 1:
+ + Điều kiện 1: bắt buộc phải có nến mà giá đóng nến nằm trên đường MA
+ + Điều kiện 2: nếu giá đóng nến của phiên đang xét mà lớn hơn tổng của giá tại điểm giao nhau của ma với đường giá + độ lệch giá vào lệnh (không có thì mặc định 0)
+ 
+=> thoả 2 điều kiện thì đóng lệnh với giá đóng lệnh là giá trung bình của giá cao và gần nhất 
+với giá tại điểm giao nhau gần nhất của sma và đường giá.
+
+- Trường hợp đóng lệnh 2: MACD-Signal chuyển xanh lá/xanh dương → đóng ngay
+- Trường hợp đóng lệnh 3: có phiên MACD xanh dương, MA cam sau điểm vào lệnh → đóng ngay
 
 ---
 
