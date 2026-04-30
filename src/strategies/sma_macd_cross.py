@@ -61,13 +61,40 @@ def _slope_color(curr: float, prev: float, older: float) -> str:
         return "red" if slope_curr <= slope_prev else "orange"
 
 
-def _find_ma_cross_price(df: pd.DataFrame, signal_type: str) -> float:
+def _find_signal_phase_start(df: pd.DataFrame, current_sig_color: str) -> int:
     """
-    Tìm giá MA tại điểm giao nhau gần nhất của MA với đường giá.
-    Với nến entry (nến cuối), điểm giao nhau chính là ma_curr vì giá vừa cắt qua MA.
-    Trả về giá trị MA tại nến entry.
+    Tìm timestamp (ms) của nến đầu tiên trong phase Signal hiện tại.
+    Phase = chuỗi nến liên tục mà Signal cùng nhóm màu (bullish hoặc bearish).
+
+    Bullish group: blue, green
+    Bearish group: red, orange
+    Neutral/other: purple, yellow — không thuộc phase nào
+
+    Duyệt ngược từ nến cuối cho đến khi gặp nến đầu tiên không còn cùng nhóm màu.
+
+    Returns: timestamp ms của nến đầu phase.
     """
-    return float(df["custom_sma_basis"].iloc[-1])
+    if current_sig_color in SIG_BULLISH:
+        phase_group = SIG_BULLISH
+    elif current_sig_color in SIG_BEARISH:
+        phase_group = SIG_BEARISH
+    else:
+        # Màu trung tính — không có phase rõ ràng, trả về timestamp nến hiện tại
+        return int(df["timestamp"].iloc[-1])
+
+    sig_arr = df["custom_macd_signal"].to_numpy()
+    n = len(df)
+
+    phase_start_idx = n - 1  # mặc định là nến hiện tại
+    for i in range(n - 1, 1, -1):
+        color_i = _slope_color(sig_arr[i], sig_arr[i - 1], sig_arr[i - 2])
+        if color_i not in phase_group:
+            # Nến i không thuộc phase → phase bắt đầu từ nến i+1
+            phase_start_idx = i + 1
+            break
+        phase_start_idx = i  # nến i vẫn thuộc phase, tiếp tục lùi
+
+    return int(df["timestamp"].iloc[phase_start_idx])
 
 
 class SmaMacdCrossStrategy(BaseStrategy):
@@ -145,6 +172,12 @@ class SmaMacdCrossStrategy(BaseStrategy):
         ma_color    = _slope_color(ma_curr,   ma_prev,   ma_older)
         sig_color   = _slope_color(sig_curr,  sig_prev,  sig_older)
         macd_color  = _slope_color(macd_curr, macd_prev, macd_older)
+
+        # ── Tìm điểm bắt đầu phase Signal hiện tại ───────────────────────────
+        # Duyệt ngược từ nến cuối, tìm nến đầu tiên trong chuỗi liên tục
+        # cùng nhóm màu (bullish hoặc bearish) với sig_color hiện tại.
+        # Dùng để kiểm tra "one-shot per phase" — chỉ vào 1 lệnh mỗi phase.
+        sig_phase_start_ts = _find_signal_phase_start(df, sig_color)
 
         # ── Xác định vị thế hiện tại của bot này ─────────────────────────────
         pos_side = None
@@ -259,7 +292,8 @@ class SmaMacdCrossStrategy(BaseStrategy):
                     f"Mở LONG: Sig={sig_color} (bullish) | "
                     f"MACD={macd_curr:.6f} ≥ Signal={sig_curr:.6f} | "
                     f"Giá cắt lên MA ({close_curr:.4f}>{ma_curr:.4f}) | "
-                    f"Giá vào≈{entry_price:.4f} | Dev={entry_deviation:.4f}"
+                    f"Giá vào≈{entry_price:.4f} | Dev={entry_deviation:.4f} | "
+                    f"Phase bắt đầu ts={sig_phase_start_ts}"
                 )
                 return StrategySignal(
                     signal=final_signal,
@@ -276,6 +310,7 @@ class SmaMacdCrossStrategy(BaseStrategy):
                         "close": round(close_curr, 6),
                         "ma_cross_price": round(ma_cross_price, 6),
                         "entry_deviation": round(entry_deviation, 6),
+                        "sig_phase_start_ts": sig_phase_start_ts,  # one-shot check
                         "trend": int(df["custom_sma_trend"].iloc[-1]),
                         "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
                         "momentum": ma_color,
@@ -306,7 +341,8 @@ class SmaMacdCrossStrategy(BaseStrategy):
                     f"Mở SHORT: Sig={sig_color} (bearish) | "
                     f"MACD={macd_curr:.6f} ≤ Signal={sig_curr:.6f} | "
                     f"Giá cắt xuống MA ({close_curr:.4f}<{ma_curr:.4f}) | "
-                    f"Giá vào≈{entry_price:.4f} | Dev={entry_deviation:.4f}"
+                    f"Giá vào≈{entry_price:.4f} | Dev={entry_deviation:.4f} | "
+                    f"Phase bắt đầu ts={sig_phase_start_ts}"
                 )
                 return StrategySignal(
                     signal=final_signal,
@@ -323,6 +359,7 @@ class SmaMacdCrossStrategy(BaseStrategy):
                         "close": round(close_curr, 6),
                         "ma_cross_price": round(ma_cross_price, 6),
                         "entry_deviation": round(entry_deviation, 6),
+                        "sig_phase_start_ts": sig_phase_start_ts,  # one-shot check
                         "trend": int(df["custom_sma_trend"].iloc[-1]),
                         "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
                         "momentum": ma_color,
@@ -359,6 +396,7 @@ class SmaMacdCrossStrategy(BaseStrategy):
                 "macd": round(macd_curr, 8),
                 "macd_signal": round(sig_curr, 8),
                 "close": round(close_curr, 6),
+                "sig_phase_start_ts": sig_phase_start_ts,
                 "trend": int(df["custom_sma_trend"].iloc[-1]),
                 "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
                 "momentum": ma_color,

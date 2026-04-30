@@ -509,6 +509,22 @@ class BotEngine:
                 if signal.is_entry:
                     await self._save_entry_opportunity(signal, effective_max, open_symbols)
 
+                # ── One-shot check: chỉ vào 1 lệnh mỗi phase Signal ──────────
+                # Áp dụng cho sma_macd_cross: mỗi phase Signal bullish/bearish
+                # chỉ được vào 1 lệnh duy nhất.
+                if signal.is_entry and self.strategy_name == "sma_macd_cross":
+                    blocked, block_reason = await self._check_one_shot_phase(
+                        signal, trading_symbol
+                    )
+                    if blocked:
+                        self.log.info(
+                            f"🚫 [{signal.signal.upper()}] {trading_symbol} — "
+                            f"One-shot: {block_reason}"
+                        )
+                        if self.notify_entry:
+                            await self._notify_entry_blocked(signal, reason=f"One-shot: {block_reason}")
+                        return
+
                 # ── Đặt lệnh — chỉ thực thi nếu:
                 #    1. allow_new_entry = True (setting của bot)
                 #    2. Chưa đạt giới hạn positions
@@ -605,6 +621,78 @@ class BotEngine:
             await send_discord_message(embed=embed, webhook_url=DISCORD_REPORT_WEBHOOK_URL or None)
         except Exception as e:
             self.log.debug(f"_notify_entry_blocked lỗi: {e}")
+
+    async def _check_one_shot_phase(self, signal, trading_symbol: str) -> tuple[bool, str]:
+        """
+        Kiểm tra điều kiện one-shot per Signal phase cho sma_macd_cross.
+        Chỉ cho phép vào 1 lệnh duy nhất trong mỗi phase Signal bullish/bearish.
+
+        Phase được xác định bởi sig_phase_start_ts trong signal.metadata.
+        Query EntryOpportunity và Trade trong DB để kiểm tra đã có entry trong phase này chưa.
+
+        Returns: (blocked: bool, reason: str)
+        """
+        from src.database.db import get_db
+        from src.database.models import EntryOpportunity, Trade
+        from sqlalchemy import select
+        from datetime import datetime, timezone
+
+        meta = signal.metadata or {}
+        sig_phase_start_ts = meta.get("sig_phase_start_ts")
+        if not sig_phase_start_ts:
+            return False, ""  # Không có phase info → không block
+
+        # Chuyển timestamp ms → datetime UTC
+        try:
+            phase_start_dt = datetime.fromtimestamp(sig_phase_start_ts / 1000, tz=timezone.utc)
+            # Bỏ timezone để so sánh với DB (lưu naive UTC)
+            phase_start_naive = phase_start_dt.replace(tzinfo=None)
+        except Exception:
+            return False, ""
+
+        signal_type = signal.signal  # "long" | "short"
+
+        try:
+            async with get_db() as db:
+                # Kiểm tra EntryOpportunity đã executed trong phase này
+                result = await db.execute(
+                    select(EntryOpportunity).where(
+                        EntryOpportunity.bot_id == self.bot_id,
+                        EntryOpportunity.symbol == trading_symbol,
+                        EntryOpportunity.signal_type == signal_type,
+                        EntryOpportunity.executed == True,
+                        EntryOpportunity.created_at >= phase_start_naive,
+                    ).limit(1)
+                )
+                existing_opp = result.scalar_one_or_none()
+                if existing_opp:
+                    return True, (
+                        f"Đã có entry {signal_type.upper()} trong phase này "
+                        f"(opp#{existing_opp.id} lúc {existing_opp.created_at})"
+                    )
+
+                # Kiểm tra Trade đã filled trong phase này
+                result2 = await db.execute(
+                    select(Trade).where(
+                        Trade.bot_id == self.bot_id,
+                        Trade.symbol == trading_symbol,
+                        Trade.signal_type == signal_type,
+                        Trade.status.in_(["filled", "closed"]),
+                        Trade.created_at >= phase_start_naive,
+                    ).limit(1)
+                )
+                existing_trade = result2.scalar_one_or_none()
+                if existing_trade:
+                    return True, (
+                        f"Đã có trade {signal_type.upper()} trong phase này "
+                        f"(trade#{existing_trade.id} lúc {existing_trade.created_at})"
+                    )
+
+        except Exception as e:
+            self.log.warning(f"_check_one_shot_phase lỗi (bỏ qua): {e}")
+            return False, ""
+
+        return False, ""
 
     async def _save_entry_opportunity(self, signal, effective_max: int, open_symbols: list):
         """Lưu EntryOpportunity vào DB cho mọi signal entry tìm được."""

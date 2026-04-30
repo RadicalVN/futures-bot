@@ -58,13 +58,14 @@ Chiến lược kết hợp **đường MA (Moving Average)** và **MACD custom*
 
 **Bối cảnh:** Momentum đang tích cực (MACD-Signal xanh), MACD đã vượt lên trên Signal, và giá vừa phá vỡ MA từ dưới lên.
 
-**3 điều kiện phải đồng thời thỏa:**
+**4 điều kiện phải đồng thời thỏa:**
 
 | # | Điều kiện | Ý nghĩa |
 |---|-----------|---------|
 | 1 | MACD-Signal đang màu **xanh lá hoặc xanh dương** | Momentum tổng thể đang tích cực — lực mua đang chiếm ưu thế |
 | 2 | MACD **đang hoặc đã** cắt lên trên Signal (MACD ≥ Signal) | Golden cross đã xảy ra — momentum ngắn hạn mạnh hơn dài hạn |
 | 3 | Nến hiện tại **đóng cửa trên MA** (giá cắt qua MA từ dưới lên) | Giá phá vỡ kháng cự động — xu hướng tăng được xác nhận |
+| 4 | **Chưa có lệnh LONG nào** được vào trong giai đoạn Signal xanh hiện tại | Chỉ vào 1 lệnh duy nhất mỗi lần Signal chuyển sang xanh — tránh vào nhiều lệnh trong cùng 1 phase |
 
 **Giá vào lệnh:**
 - Lấy trung bình của `high` nến hiện tại và giá tại điểm giao nhau gần nhất của MA với đường giá
@@ -80,19 +81,22 @@ Chiến lược kết hợp **đường MA (Moving Average)** và **MACD custom*
 
 > **Lưu ý TH1:** Yêu cầu cả 2 điều kiện — giá dưới MA *và* chưa vượt quá ngưỡng độ lệch. Điều này tránh đóng lệnh quá sớm khi giá chỉ chạm MA rồi bật lại.
 
+> **Lưu ý Điều kiện 4 (one-shot):** Giai đoạn Signal xanh bắt đầu từ nến đầu tiên Signal chuyển sang xanh lá/xanh dương, kết thúc khi Signal chuyển sang màu khác (đỏ/cam/tím/vàng). Trong 1 giai đoạn xanh liên tục, chỉ được vào tối đa 1 lệnh LONG. Khi Signal chuyển sang màu khác rồi quay lại xanh → phase mới bắt đầu, có thể vào lệnh mới.
+
 ---
 
 ### Entry SHORT (Bán)
 
 **Bối cảnh:** Momentum đang tiêu cực (MACD-Signal đỏ/cam), MACD đã cắt xuống dưới Signal, và giá vừa phá vỡ MA từ trên xuống.
 
-**3 điều kiện phải đồng thời thỏa:**
+**4 điều kiện phải đồng thời thỏa:**
 
 | # | Điều kiện | Ý nghĩa |
 |---|-----------|---------|
 | 1 | MACD-Signal đang màu **cam hoặc đỏ** | Momentum tổng thể đang tiêu cực — lực bán đang chiếm ưu thế |
 | 2 | MACD **đang hoặc đã** cắt xuống dưới Signal (MACD ≤ Signal) | Death cross đã xảy ra — momentum ngắn hạn yếu hơn dài hạn |
 | 3 | Nến hiện tại **đóng cửa dưới MA** (giá cắt qua MA từ trên xuống) | Giá phá vỡ hỗ trợ động — xu hướng giảm được xác nhận |
+| 4 | **Chưa có lệnh SHORT nào** được vào trong giai đoạn Signal đỏ/cam hiện tại | Chỉ vào 1 lệnh duy nhất mỗi lần Signal chuyển sang đỏ/cam — tránh vào nhiều lệnh trong cùng 1 phase |
 
 **Giá vào lệnh:**
 - Lấy trung bình của `low` nến hiện tại và giá tại điểm giao nhau gần nhất của MA với đường giá
@@ -107,6 +111,8 @@ Chiến lược kết hợp **đường MA (Moving Average)** và **MACD custom*
 | **TH3** (ngay lập tức) | MACD màu **xanh dương** trong khi MA màu **cam** | Đóng ngay — phân kỳ tăng: momentum ngắn hạn phục hồi trước MA |
 
 > **Lưu ý TH1:** Yêu cầu cả 2 điều kiện — giá trên MA *và* đã vượt quá ngưỡng độ lệch. Tránh đóng lệnh quá sớm khi giá chỉ chạm MA rồi tiếp tục giảm.
+
+> **Lưu ý Điều kiện 4 (one-shot):** Giai đoạn Signal đỏ/cam bắt đầu từ nến đầu tiên Signal chuyển sang cam/đỏ, kết thúc khi Signal chuyển sang màu khác. Trong 1 giai đoạn đỏ/cam liên tục, chỉ được vào tối đa 1 lệnh SHORT. Khi Signal chuyển sang màu khác rồi quay lại đỏ/cam → phase mới bắt đầu, có thể vào lệnh mới.
 
 ---
 
