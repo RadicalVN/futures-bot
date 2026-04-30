@@ -289,56 +289,80 @@ def _analyze_entry_conditions(strategy_name: str, signal: str, meta: dict, posit
         macd_color = meta.get("macd_color", "")
         close_val  = meta.get("close", 0)
         ma_val     = meta.get("ma", 0)
+        macd_v     = meta.get("macd", 0)
+        sig_v      = meta.get("macd_signal", 0)
 
         BULLISH = {"blue", "green"}
         BEARISH = {"red", "orange"}
 
-        if signal == "long" or (not signal and trend == 1):
+        # Khi signal == "none" (đang chờ), hiển thị cả 2 chiều để trader biết
+        # đang gần điều kiện nào hơn. Không tự suy đoán chiều.
+        if signal == "long":
+            # ── Đang chờ / đã có signal LONG ─────────────────────────────────
             # Điều kiện 1: Signal chuyển từ bearish → bullish/reversal
             if sig_color in BULLISH | {"purple"}:
                 met.append(f"✅ MACD-Signal chuyển {sig_color} (từ bearish)")
-            elif sig_color in BEARISH:
-                missing.append(f"❌ MACD-Signal={sig_color} — cần chuyển sang tím/xanh")
+            else:
+                missing.append(f"❌ MACD-Signal={sig_color} — cần chuyển sang tím/xanh lá/xanh dương")
 
-            # Điều kiện 2: MACD golden cross
-            macd_v = meta.get("macd", 0)
-            sig_v  = meta.get("macd_signal", 0)
+            # Điều kiện 2: MACD golden cross (MACD cắt lên Signal)
             if macd_v > sig_v:
                 met.append(f"✅ MACD > Signal (golden cross)")
             else:
-                missing.append(f"⏳ Chờ MACD cắt lên Signal")
+                missing.append(f"⏳ Chờ MACD cắt lên Signal (MACD={macd_v:.6f} < Sig={sig_v:.6f})")
 
-            # Điều kiện 3: Giá trên MA
+            # Điều kiện 3: Giá đóng cửa trên MA
             if close_val and ma_val:
                 if close_val > ma_val:
                     met.append(f"✅ Giá ({close_val:.4f}) trên MA ({ma_val:.4f})")
                 else:
                     missing.append(f"⏳ Giá ({close_val:.4f}) chưa cắt lên MA ({ma_val:.4f})")
 
-            if ma_color:
-                met.append(f"✅ MA={ma_color}") if ma_color in BULLISH else missing.append(f"⏳ MA={ma_color}")
-
-        else:  # short
+        elif signal == "short":
+            # ── Đang chờ / đã có signal SHORT ────────────────────────────────
+            # Điều kiện 1: Signal chuyển từ bullish → bearish/reversal
             if sig_color in BEARISH | {"purple"}:
                 met.append(f"✅ MACD-Signal chuyển {sig_color} (từ bullish)")
-            elif sig_color in BULLISH:
+            else:
                 missing.append(f"❌ MACD-Signal={sig_color} — cần chuyển sang tím/đỏ/cam")
 
-            macd_v = meta.get("macd", 0)
-            sig_v  = meta.get("macd_signal", 0)
+            # Điều kiện 2: MACD death cross (MACD cắt xuống Signal)
             if macd_v < sig_v:
                 met.append(f"✅ MACD < Signal (death cross)")
             else:
-                missing.append(f"⏳ Chờ MACD cắt xuống Signal")
+                missing.append(f"⏳ Chờ MACD cắt xuống Signal (MACD={macd_v:.6f} > Sig={sig_v:.6f})")
 
+            # Điều kiện 3: Giá đóng cửa dưới MA
             if close_val and ma_val:
                 if close_val < ma_val:
                     met.append(f"✅ Giá ({close_val:.4f}) dưới MA ({ma_val:.4f})")
                 else:
                     missing.append(f"⏳ Giá ({close_val:.4f}) chưa cắt xuống MA ({ma_val:.4f})")
 
+        else:
+            # ── signal == "none": chưa có entry signal ────────────────────────
+            # Hiển thị trạng thái hiện tại của từng indicator để trader theo dõi
+            # Không đánh dấu "✅" hay "❌" vì chưa biết chiều nào sẽ trigger
+
+            # MA
             if ma_color:
-                met.append(f"✅ MA={ma_color}") if ma_color in BEARISH else missing.append(f"⏳ MA={ma_color}")
+                ma_label = "tăng" if ma_color in BULLISH else ("giảm" if ma_color in BEARISH else "trung tính")
+                missing.append(f"MA={ma_color} ({ma_label})")
+
+            # MACD-Signal
+            if sig_color:
+                sig_label = "tăng" if sig_color in BULLISH else ("giảm" if sig_color in BEARISH else "trung tính")
+                missing.append(f"MACD-Signal={sig_color} ({sig_label})")
+
+            # MACD vs Signal
+            if macd_v and sig_v:
+                cross_label = "MACD > Signal" if macd_v > sig_v else "MACD < Signal"
+                missing.append(f"{cross_label} ({macd_v:.6f} vs {sig_v:.6f})")
+
+            # Giá vs MA
+            if close_val and ma_val:
+                price_label = "trên MA" if close_val > ma_val else "dưới MA"
+                missing.append(f"Giá ({close_val:.4f}) {price_label} ({ma_val:.4f})")
 
     # ── Fallback ──────────────────────────────────────────────────────────────
     else:
@@ -427,11 +451,11 @@ def build_candle_status_embed(candle_time: str, bot_reports: list[dict]) -> dict
             lines.append("_Chưa có dữ liệu — chờ chu kỳ quét đầu tiên_")
 
         else:
-            ready_to_enter = met and not missing and not position
+            ready_to_enter = signal in ("long", "short") and met and not missing and not position
 
             if ready_to_enter:
                 # ── ĐỦ ĐIỀU KIỆN: hiển thị đầy đủ thông tin để vào lệnh ──────
-                side_label = "SHORT 🔴" if "GIẢM" in " ".join(met) or meta.get("trend") == -1 else "LONG 🟢"
+                side_label = "LONG 🟢" if signal == "long" else "SHORT 🔴"
                 entry_price = meta.get("entry_price") or meta.get("price", 0)
                 sl = meta.get("stop_loss") or params.get("stop_loss_pct", 0.02)
                 tp = meta.get("take_profit") or params.get("take_profit_pct", 0.04)
