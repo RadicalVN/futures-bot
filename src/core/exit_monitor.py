@@ -136,6 +136,7 @@ class ExitMonitor:
         """Chạy 1 lần kiểm tra exit. Được gọi từ _run_cycle của BotEngine."""
         try:
             await self._check_open_trades(positions)
+            await self._check_orphan_positions(positions)
             await self._check_entry_opportunities()
         except Exception as e:
             self.log.error(
@@ -365,6 +366,96 @@ class ExitMonitor:
 
         except Exception as e:
             self.log.error(f"❌ ExitMonitor execute_exit {trade.symbol}: {e}\n{traceback.format_exc()}")
+
+    async def _check_orphan_positions(self, positions: list):
+        """
+        Phát hiện vị thế trên exchange không có Trade record trong DB (orphan positions).
+        Nguyên nhân: service crash sau khi đặt lệnh nhưng trước khi lưu DB,
+        hoặc trade bị đánh dấu closed nhầm trong DB.
+        
+        Xử lý: tạo Trade record mới từ thông tin exchange để ExitMonitor có thể theo dõi.
+        """
+        from src.core.bot_engine import _normalize_symbol
+
+        if not positions:
+            return
+
+        # Lấy symbols của bot này
+        bot_symbols_clean = set(
+            _normalize_symbol(s).replace("/", "").replace(":USDT", "")
+            for s in self.engine.target_symbols
+        )
+
+        for pos in positions:
+            sym_raw = pos.get("symbol", "")
+            sym_clean = sym_raw.replace("/", "").replace(":USDT", "")
+            if sym_clean not in bot_symbols_clean:
+                continue
+
+            pos_size = abs(float(pos.get("size", pos.get("contracts", 0))))
+            if pos_size <= 0:
+                continue
+
+            # Kiểm tra xem có Trade record filled nào cho bot này + symbol này không
+            async with get_db() as db:
+                result = await db.execute(
+                    select(Trade).where(
+                        Trade.bot_id == self.engine.bot_id,
+                        Trade.symbol == sym_raw,
+                        Trade.status == "filled",
+                        Trade.closed_at == None,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+
+            if existing:
+                continue  # Đã có record, bình thường
+
+            # Orphan position — tạo Trade record để ExitMonitor có thể theo dõi
+            pos_side = pos.get("side", "long")
+            signal_type = "long" if pos_side == "long" else "short"
+            entry_price = float(pos.get("entry_price", 0) or 0)
+
+            self.log.warning(
+                f"⚠️ Orphan position phát hiện: {sym_raw} {signal_type.upper()} "
+                f"size={pos_size} entry={entry_price} — tạo Trade record để theo dõi"
+            )
+
+            async with get_db() as db:
+                orphan_trade = Trade(
+                    bot_id=self.engine.bot_id,
+                    order_id=f"orphan_{sym_clean}_{int(datetime.utcnow().timestamp())}",
+                    symbol=sym_raw,
+                    side="buy" if signal_type == "long" else "sell",
+                    order_type="market",
+                    amount=pos_size,
+                    price=entry_price,
+                    avg_price=entry_price,
+                    status="filled",
+                    signal_type=signal_type,
+                    leverage=int(pos.get("leverage", 1) or 1),
+                    strategy=self.engine.strategy_name,
+                )
+                db.add(orphan_trade)
+
+            # Gửi cảnh báo Discord
+            from src.core.discord_notifier import DISCORD_REPORT_WEBHOOK_URL
+            embed = {
+                "title": f"⚠️ Orphan Position — {sym_raw}",
+                "color": 0xFF9800,
+                "description": (
+                    f"Phát hiện vị thế trên exchange không có DB record.\n"
+                    f"Đã tạo Trade record để ExitMonitor theo dõi."
+                ),
+                "fields": [
+                    {"name": "Side", "value": f"`{signal_type.upper()}`", "inline": True},
+                    {"name": "Size", "value": f"`{pos_size}`", "inline": True},
+                    {"name": "Entry Price", "value": f"`{entry_price}`", "inline": True},
+                ],
+                "footer": {"text": f"Bot#{self.engine.bot_id} {self.engine.bot_name} — ExitMonitor"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            await send_discord_message(embed=embed, webhook_url=DISCORD_REPORT_WEBHOOK_URL or None)
 
     async def _check_entry_opportunities(self):
         """
