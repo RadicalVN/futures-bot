@@ -126,7 +126,8 @@ class OrderManager:
                 f"Amount: {plan.amount} | SL: {plan.stop_loss:.4f} | TP: {plan.take_profit:.4f}"
             )
 
-            # Gửi thông báo Discord
+            # Gửi thông báo Discord — luôn gửi khi đặt lệnh thực tế thành công
+            # (notify_entry chỉ ảnh hưởng đến noti khi bị chặn, không ảnh hưởng lệnh thật)
             embed = build_entry_embed(
                 bot_id=getattr(self, 'bot_id', '?'),
                 signal_type=signal.signal,

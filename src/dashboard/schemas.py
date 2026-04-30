@@ -18,3 +18,10 @@ class BotCreate(BaseModel):
 
 class BotStatusUpdate(BaseModel):
     status: str = Field(..., description="Trạng thái mong muốn: running, stopped")
+
+class BotSettingsUpdate(BaseModel):
+    """Cập nhật job behavior settings của bot"""
+    allow_new_entry:  Optional[bool] = Field(None, description="Cho phép vào lệnh mới")
+    notify_entry:     Optional[bool] = Field(None, description="Gửi noti khi tìm thấy entry")
+    allow_exit_scan:  Optional[bool] = Field(None, description="Quét đóng lệnh / invalidate entry")
+    notify_exit:      Optional[bool] = Field(None, description="Gửi noti khi đóng lệnh / entry")

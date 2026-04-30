@@ -5,6 +5,7 @@ export const api = {
     getBots: () => fetch('/api/bots').then(r => r.json()),
     createBot: (data) => fetch('/api/bots', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
     updateBotStatus: (id, status) => fetch(`/api/bots/${id}/status`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status}) }),
+    updateBotSettings: (id, settings) => fetch(`/api/bots/${id}/settings`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings) }).then(r => r.json()),
     deleteBot: (id) => fetch(`/api/bots/${id}`, { method: 'DELETE' }),
     
     getEvents: (limit=50) => fetch(`/api/events?limit=${limit}`).then(r => r.json()),

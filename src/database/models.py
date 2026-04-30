@@ -73,7 +73,15 @@ class Bot(Base):
     
     # Soft Delete để không mất lịch sử giao dịch khi xóa bot
     is_deleted = Column(Boolean, default=False)
-    
+
+    # ── Job behavior settings ─────────────────────────────────────────────────
+    # Khi bot stopped: allow_new_entry tự động = False
+    # Các flag này cho phép tuỳ chỉnh hành vi khi bot đang running
+    allow_new_entry  = Column(Boolean, default=True)   # Cho phép vào lệnh mới
+    notify_entry     = Column(Boolean, default=True)   # Gửi noti khi tìm thấy entry
+    allow_exit_scan  = Column(Boolean, default=True)   # Quét đóng lệnh / invalidate entry
+    notify_exit      = Column(Boolean, default=True)   # Gửi noti khi đóng lệnh / entry
+
     # Lưu các tham số tùy chỉnh của chiến thuật
     parameters = Column(JSON, default={})
     
@@ -104,6 +112,10 @@ class Bot(Base):
             "strategy_name": self.strategy_name,
             "status": self.status,
             "is_deleted": self.is_deleted,
+            "allow_new_entry": self.allow_new_entry if self.allow_new_entry is not None else True,
+            "notify_entry": self.notify_entry if self.notify_entry is not None else True,
+            "allow_exit_scan": self.allow_exit_scan if self.allow_exit_scan is not None else True,
+            "notify_exit": self.notify_exit if self.notify_exit is not None else True,
             "parameters": self.parameters,
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,

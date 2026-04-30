@@ -1,5 +1,5 @@
 import { loadDashboard } from './dashboard.js';
-import { fetchBots, createBot, toggleBot, deleteBot } from './bots.js';
+import { fetchBots, createBot, toggleBot, deleteBot, updateBotSetting } from './bots.js';
 import { loadSettings, createAccount } from './accounts.js';
 import { loadChart, populateSymbolsDatalist, globalReset, globalRefresh, onLeftTimeframeChange, onRightTimeframeChange, onSymbolChange, toggleLegendMenu, toggleDataset, scrollToLatest } from './chart.js';
 import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignals, openStrategyDetail } from './strategies.js';
@@ -10,6 +10,7 @@ import { loadTradesPage, applyTradeFilters, resetTradeFilters } from './trades.j
 window.createBot = createBot;
 window.toggleBot = toggleBot;
 window.deleteBot = deleteBot;
+window.updateBotSetting = updateBotSetting;
 window.createAccount = createAccount;
 window.loadChart = loadChart;
 window.globalReset = globalReset;

@@ -349,16 +349,19 @@ class ExitMonitor:
 
             self.log.info(f"✅ ExitMonitor: Đã đóng {trade.symbol} | PnL: {pnl:+.4f} USDT | {reason}")
 
-            # Discord noti
-            embed = build_exit_embed(
-                bot_id=self.engine.bot_id,
-                signal_type=f"close_{trade.signal_type}",
-                symbol=trade.symbol,
-                close_price=close_price,
-                pnl=pnl,
-                reason=f"[ExitMonitor] {reason}",
-            )
-            await send_discord_message(embed=embed)
+            # Discord noti — chỉ gửi nếu notify_exit=True
+            if getattr(self.engine, 'notify_exit', True):
+                embed = build_exit_embed(
+                    bot_id=self.engine.bot_id,
+                    signal_type=f"close_{trade.signal_type}",
+                    symbol=trade.symbol,
+                    close_price=close_price,
+                    pnl=pnl,
+                    reason=f"[ExitMonitor] {reason}",
+                )
+                await send_discord_message(embed=embed)
+            else:
+                self.log.debug(f"notify_exit=False — bỏ qua Discord noti đóng lệnh {trade.symbol}")
 
         except Exception as e:
             self.log.error(f"❌ ExitMonitor execute_exit {trade.symbol}: {e}\n{traceback.format_exc()}")
@@ -421,27 +424,30 @@ class ExitMonitor:
                             o.delete_reason = reason
                             o.invalidated_at = datetime.utcnow()
 
-                    # Noti Discord (channel report)
-                    from src.core.discord_notifier import DISCORD_REPORT_WEBHOOK_URL
-                    pnl_estimate = (current_price - (opp.entry_price or current_price))
-                    if opp.signal_type == "short":
-                        pnl_estimate = -pnl_estimate
-                    embed = {
-                        "title": f"🗑️ Cơ hội hết hạn #{opp.id} — {opp.symbol}",
-                        "color": 0x546E7A,
-                        "fields": [
-                            {"name": "Side", "value": f"`{opp.signal_type.upper()}`", "inline": True},
-                            {"name": "Giá entry", "value": f"`{opp.entry_price}`", "inline": True},
-                            {"name": "Giá hiện tại", "value": f"`{current_price:.4f}`", "inline": True},
-                            {"name": "Lý do", "value": reason[:500], "inline": False},
-                        ],
-                        "footer": {"text": f"Bot#{self.engine.bot_id} {self.engine.bot_name} — ExitMonitor"},
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                    await send_discord_message(
-                        embed=embed,
-                        webhook_url=DISCORD_REPORT_WEBHOOK_URL or None
-                    )
+                    # Noti Discord (channel report) — chỉ gửi nếu notify_exit=True
+                    if getattr(self.engine, 'notify_exit', True):
+                        from src.core.discord_notifier import DISCORD_REPORT_WEBHOOK_URL
+                        pnl_estimate = (current_price - (opp.entry_price or current_price))
+                        if opp.signal_type == "short":
+                            pnl_estimate = -pnl_estimate
+                        embed = {
+                            "title": f"🗑️ Cơ hội hết hạn #{opp.id} — {opp.symbol}",
+                            "color": 0x546E7A,
+                            "fields": [
+                                {"name": "Side", "value": f"`{opp.signal_type.upper()}`", "inline": True},
+                                {"name": "Giá entry", "value": f"`{opp.entry_price}`", "inline": True},
+                                {"name": "Giá hiện tại", "value": f"`{current_price:.4f}`", "inline": True},
+                                {"name": "Lý do", "value": reason[:500], "inline": False},
+                            ],
+                            "footer": {"text": f"Bot#{self.engine.bot_id} {self.engine.bot_name} — ExitMonitor"},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                        await send_discord_message(
+                            embed=embed,
+                            webhook_url=DISCORD_REPORT_WEBHOOK_URL or None
+                        )
+                    else:
+                        self.log.debug(f"notify_exit=False — bỏ qua Discord noti invalidate opp #{opp.id}")
 
             except Exception as e:
                 self.log.error(f"❌ ExitMonitor check opportunity #{opp.id}: {e}")

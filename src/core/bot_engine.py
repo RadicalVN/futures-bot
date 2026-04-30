@@ -129,6 +129,13 @@ class BotEngine:
         self.is_running = False
         self.target_symbols = []
 
+        # Job behavior settings — đọc từ DB khi initialize()
+        # Khi bot stopped: allow_new_entry luôn = False (enforce ở _run_cycle)
+        self.allow_new_entry: bool = True
+        self.notify_entry: bool = True
+        self.allow_exit_scan: bool = True
+        self.notify_exit: bool = True
+
         # Cache signal cuối cùng của mỗi symbol để dùng cho status report
         self._last_signals: dict = {}  # symbol → StrategySignal
 
@@ -139,6 +146,22 @@ class BotEngine:
         # Khởi tạo per-bot logger
         self.log = BotLogger(self.bot_id, self.bot_name)
         self.log.info(f"Đang khởi tạo BotEngine [{self.symbols_config} | {self.strategy_name}]")
+
+        # Đọc job behavior settings từ DB
+        async with get_db() as db:
+            result = await db.execute(select(Bot).where(Bot.id == self.bot_id))
+            bot_row = result.scalar_one_or_none()
+            if bot_row:
+                self.allow_new_entry = bool(bot_row.allow_new_entry) if bot_row.allow_new_entry is not None else True
+                self.notify_entry    = bool(bot_row.notify_entry)    if bot_row.notify_entry    is not None else True
+                self.allow_exit_scan = bool(bot_row.allow_exit_scan) if bot_row.allow_exit_scan is not None else True
+                self.notify_exit     = bool(bot_row.notify_exit)     if bot_row.notify_exit     is not None else True
+                self.log.info(
+                    f"Job settings: allow_new_entry={self.allow_new_entry} | "
+                    f"notify_entry={self.notify_entry} | "
+                    f"allow_exit_scan={self.allow_exit_scan} | "
+                    f"notify_exit={self.notify_exit}"
+                )
 
         if self.account_id:
             async with get_db() as db:
@@ -251,10 +274,27 @@ class BotEngine:
         self.log.info("Đang dừng bot...")
         self.is_running = False
 
+    async def _reload_settings(self):
+        """Reload job behavior settings từ DB — gọi mỗi _run_cycle để pick up thay đổi realtime."""
+        try:
+            async with get_db() as db:
+                result = await db.execute(select(Bot).where(Bot.id == self.bot_id))
+                bot_row = result.scalar_one_or_none()
+                if bot_row:
+                    self.allow_new_entry = bool(bot_row.allow_new_entry) if bot_row.allow_new_entry is not None else True
+                    self.notify_entry    = bool(bot_row.notify_entry)    if bot_row.notify_entry    is not None else True
+                    self.allow_exit_scan = bool(bot_row.allow_exit_scan) if bot_row.allow_exit_scan is not None else True
+                    self.notify_exit     = bool(bot_row.notify_exit)     if bot_row.notify_exit     is not None else True
+        except Exception as e:
+            self.log.debug(f"_reload_settings lỗi (bỏ qua): {e}")
+
     # ── Main cycle ────────────────────────────────────────────────────────────
 
     async def _run_cycle(self):
         try:
+            # 0. Reload job behavior settings từ DB (pick up thay đổi realtime)
+            await self._reload_settings()
+
             # 1. Lấy vị thế hiện tại
             try:
                 positions = await self.exchange.get_positions()
@@ -284,6 +324,9 @@ class BotEngine:
                 f"▶ Quét {len(self.target_symbols)} symbol "
                 f"| TF: {self.timeframe} "
                 f"| Vị thế bot này: {bot_open_count}/{effective_max}"
+                + (f" | ⛔ Không vào lệnh mới" if not self.allow_new_entry else "")
+                + (f" | 🔕 Tắt noti entry" if not self.notify_entry else "")
+                + (f" | ⏸ Tắt quét exit" if not self.allow_exit_scan else "")
             )
 
             # 2. Quét TẤT CẢ symbol — không bỏ qua dù đã đạt max positions
@@ -303,8 +346,10 @@ class BotEngine:
                     await asyncio.sleep(0.2)
 
             # 3. Chạy ExitMonitor — kiểm tra điều kiện đóng lệnh và invalidate opportunities
-            if self.exit_monitor:
+            if self.exit_monitor and self.allow_exit_scan:
                 await self.exit_monitor.run_once(positions)
+            elif self.exit_monitor and not self.allow_exit_scan:
+                self.log.debug("⏸ allow_exit_scan=False — bỏ qua ExitMonitor cycle này")
 
             # 4. Kiểm tra có nến 5m mới đóng không → gửi status report
             await self._maybe_send_candle_report(positions)
@@ -464,7 +509,21 @@ class BotEngine:
                 if signal.is_entry:
                     await self._save_entry_opportunity(signal, effective_max, open_symbols)
 
-                # ── Đặt lệnh — chỉ thực thi nếu chưa đạt giới hạn positions ─
+                # ── Đặt lệnh — chỉ thực thi nếu:
+                #    1. allow_new_entry = True (setting của bot)
+                #    2. Chưa đạt giới hạn positions
+                # ─────────────────────────────────────────────────────────────
+                if signal.is_entry and not self.allow_new_entry:
+                    self.log.info(
+                        f"⛔ [{signal.signal.upper()}] {trading_symbol} — "
+                        f"allow_new_entry=False, KHÔNG đặt lệnh"
+                        + (" | Noti tắt" if not self.notify_entry else "")
+                    )
+                    # Gửi noti entry nếu notify_entry=True
+                    if self.notify_entry:
+                        await self._notify_entry_blocked(signal, reason="allow_new_entry=False")
+                    return
+
                 is_at_limit = (
                     signal.is_entry
                     and bot_open_count >= effective_max
@@ -475,7 +534,9 @@ class BotEngine:
                         f"⚠️ [{signal.signal.upper()}] {trading_symbol} — "
                         f"Đã đạt giới hạn {effective_max} vị thế, KHÔNG đặt lệnh nhưng vẫn ghi nhận signal"
                     )
-                    # Vẫn lưu signal để report Discord biết có cơ hội
+                    # Gửi noti entry nếu notify_entry=True
+                    if self.notify_entry:
+                        await self._notify_entry_blocked(signal, reason=f"Đạt giới hạn {effective_max} vị thế")
                 else:
                     try:
                         self.order_manager.effective_max_positions = effective_max
@@ -521,6 +582,29 @@ class BotEngine:
             self._last_signals[trading_symbol] = _make_error_signal(
                 trading_symbol, e, "unknown error in _analyze_symbol"
             )
+
+    async def _notify_entry_blocked(self, signal, reason: str):
+        """Gửi noti Discord khi tìm thấy entry nhưng không vào lệnh (bị chặn bởi settings/limit)."""
+        try:
+            from src.core.discord_notifier import send_discord_message, DISCORD_REPORT_WEBHOOK_URL
+            from datetime import timezone
+            embed = {
+                "title": f"🔔 Entry tìm thấy — Không vào lệnh",
+                "color": 0xFFA726,  # cam
+                "fields": [
+                    {"name": "Bot", "value": f"`#{self.bot_id} {self.bot_name}`", "inline": True},
+                    {"name": "Symbol", "value": f"`{signal.symbol}`", "inline": True},
+                    {"name": "Side", "value": f"`{signal.signal.upper()}`", "inline": True},
+                    {"name": "Giá", "value": f"`{signal.price}`", "inline": True},
+                    {"name": "Lý do không vào", "value": reason, "inline": False},
+                    {"name": "Signal reason", "value": (signal.reason or "")[:300], "inline": False},
+                ],
+                "footer": {"text": f"Bot#{self.bot_id} {self.bot_name} — notify_entry"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            await send_discord_message(embed=embed, webhook_url=DISCORD_REPORT_WEBHOOK_URL or None)
+        except Exception as e:
+            self.log.debug(f"_notify_entry_blocked lỗi: {e}")
 
     async def _save_entry_opportunity(self, signal, effective_max: int, open_symbols: list):
         """Lưu EntryOpportunity vào DB cho mọi signal entry tìm được."""
