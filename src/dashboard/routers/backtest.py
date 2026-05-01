@@ -754,7 +754,37 @@ async def _run_job(job_id: str, bot, account, req):
                 f"Kiểm tra lại khoảng thời gian."
             )
 
-        await exchange.connect()
+        # Retry connect toi da 3 lan neu timeout
+        connect_ok = False
+        last_connect_err = None
+        for attempt in range(1, 4):
+            try:
+                _jobs[job_id]["message"] = f"Đang kết nối exchange (lần {attempt}/3)..."
+                await exchange.connect()
+                connect_ok = True
+                break
+            except Exception as e_conn:
+                last_connect_err = e_conn
+                logger.warning(f"Backtest [{job_id}]: connect attempt {attempt} failed: {e_conn}")
+                if attempt < 3:
+                    await _asyncio.sleep(3)
+                    # Tao lai exchange object de reset connection state
+                    if account:
+                        exchange = BinanceExchange(
+                            api_key=account.api_key, api_secret=account.api_secret,
+                            mode=account.mode, market_type=market_type,
+                        )
+                    else:
+                        exchange = create_exchange_from_env()
+                        exchange.market_type = market_type
+
+        if not connect_ok:
+            raise ValueError(
+                f"Không thể kết nối exchange sau 3 lần thử. "
+                f"Lỗi: {type(last_connect_err).__name__}: {last_connect_err}. "
+                f"Vui lòng thử lại sau."
+            )
+
         result = await _run_backtest_engine(
             bot=bot, exchange=exchange,
             start_ms=start_ms, end_ms=end_ms,
