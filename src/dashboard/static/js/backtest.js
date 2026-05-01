@@ -63,8 +63,14 @@ export async function loadBacktestPage() {
   // Default start date: 30 days ago
   const d = new Date();
   d.setDate(d.getDate() - 30);
-  document.getElementById('btStartDate').value = d.toISOString().slice(0, 10);
+  const defaultDate = d.toISOString().slice(0, 10);
+  document.getElementById('btStartDate').value = defaultDate;
   document.getElementById('btEndDate').value = '';
+  // Strategy form defaults
+  if (document.getElementById('btSStartDate')) {
+    document.getElementById('btSStartDate').value = defaultDate;
+    document.getElementById('btSEndDate').value = '';
+  }
 
   // Reset result panels
   _resetResults();
@@ -354,4 +360,108 @@ function _resetResults() {
   document.getElementById('btLoading').style.display      = 'none';
   _allTrades = [];
   if (_equityChart) { _equityChart.destroy(); _equityChart = null; }
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+export function switchBtTab(tab) {
+  const stratPanel = document.getElementById('btPanelStrategy');
+  const botPanel   = document.getElementById('btPanelBot');
+  const tabS = document.getElementById('btTabStrategy');
+  const tabB = document.getElementById('btTabBot');
+  if (tab === 'strategy') {
+    stratPanel.style.display = '';
+    botPanel.style.display   = 'none';
+    tabS.className = 'btn btn-primary';
+    tabB.className = 'btn';
+    tabB.style.cssText = 'padding:8px 20px; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border);';
+  } else {
+    stratPanel.style.display = 'none';
+    botPanel.style.display   = '';
+    tabB.className = 'btn btn-primary';
+    tabS.className = 'btn';
+    tabS.style.cssText = 'padding:8px 20px; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border);';
+  }
+  _resetResults();
+}
+
+export function onStrategyChange() {
+  const v = document.getElementById('btStrategyName').value;
+  document.getElementById('btSV2Params').style.display = (v === 'sma_macd_cross_v2' || v === 'sma_macd_cross_v3') ? 'block' : 'none';
+  document.getElementById('btSV3Params').style.display = (v === 'sma_macd_cross_v3') ? 'block' : 'none';
+  document.getElementById('btSV4Params').style.display = (v === 'sma_macd_cross_v4') ? 'block' : 'none';
+}
+
+// ── Run strategy backtest ─────────────────────────────────────────────────────
+
+export async function runStrategyBacktest(e) {
+  e.preventDefault();
+
+  const strategy  = document.getElementById('btStrategyName').value;
+  const symbol    = document.getElementById('btSymbol').value.trim().toUpperCase();
+  const startDate = document.getElementById('btSStartDate').value;
+  const endDate   = document.getElementById('btSEndDate').value || null;
+  const balance   = parseFloat(document.getElementById('btSBalance').value);
+  const timeframe = document.getElementById('btSTimeframe').value || null;
+  const bbLength  = document.getElementById('btSBbLength').value ? parseInt(document.getElementById('btSBbLength').value) : null;
+
+  if (!symbol) return showToast('Vui lòng nhập cặp tiền', 'error');
+  if (!startDate) return showToast('Vui lòng chọn ngày bắt đầu', 'error');
+
+  const payload = {
+    strategy_name: strategy,
+    symbol,
+    start_date: startDate,
+    end_date: endDate,
+    initial_balance: balance,
+    timeframe,
+    bb_length: bbLength,
+  };
+
+  // V2/V3 params
+  const useTrend = document.getElementById('btSUseTrend')?.value;
+  if (useTrend === 'true')  payload.use_trend_filter = true;
+  if (useTrend === 'false') payload.use_trend_filter = false;
+
+  // V3 params
+  const minDist = document.getElementById('btSMinDist')?.value;
+  const minHold = document.getElementById('btSMinHold')?.value;
+  if (minDist) payload.min_ma_distance_pct = parseFloat(minDist);
+  if (minHold) payload.min_hold_candles = parseInt(minHold);
+
+  // V4 params
+  const lev     = document.getElementById('btSLeverage')?.value;
+  const notional= document.getElementById('btSNotional')?.value;
+  const sl      = document.getElementById('btSSl')?.value;
+  const tp      = document.getElementById('btSTp')?.value;
+  if (lev)      payload.leverage_v4    = parseInt(lev);
+  if (notional) payload.notional_usdt  = parseFloat(notional);
+  if (sl)       payload.stop_loss_pct  = parseFloat(sl);
+  if (tp)       payload.take_profit_pct = parseFloat(tp);
+
+  _resetResults();
+  document.getElementById('btLoading').style.display = 'block';
+  const btn = document.getElementById('btSRunBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Đang chạy...';
+
+  try {
+    const r = await fetch('/api/backtest/run-strategy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || 'Lỗi');
+    }
+    const { job_id } = await r.json();
+    await _pollJob(job_id);
+  } catch (err) {
+    showToast(`Lỗi: ${err.message}`, 'error');
+    document.getElementById('btLoading').style.display = 'none';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Chạy Backtest';
+  }
 }

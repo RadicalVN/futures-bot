@@ -37,6 +37,28 @@ class BacktestRequest(BaseModel):
     take_profit_pct: Optional[float] = None
 
 
+class StrategyBacktestRequest(BaseModel):
+    """Chạy backtest theo chiến lược + cặp tiền, không cần bot_id."""
+    strategy_name: str           # sma_macd_cross / v2 / v3 / v4
+    symbol: str                  # BTCUSDT, TRUMPUSDT, ...
+    start_date: str
+    end_date: Optional[str] = None
+    initial_balance: float = 10000.0
+    # Params chung
+    timeframe: Optional[str] = None         # mặc định 5m
+    bb_length: Optional[int] = None         # mặc định theo version
+    # V2/V3/V4
+    use_trend_filter: Optional[bool] = None
+    # V3
+    min_ma_distance_pct: Optional[float] = None
+    min_hold_candles: Optional[int] = None
+    # V4
+    leverage_v4: Optional[int] = None
+    notional_usdt: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    take_profit_pct: Optional[float] = None
+
+
 def _timeframe_ms(tf):
     units = {"m": 60000, "h": 3600000, "d": 86400000, "w": 604800000}
     try:
@@ -933,6 +955,178 @@ async def get_progress(job_id: str):
         "result": job["result"],       # None khi đang chạy, dict khi done
         "error": job["error"],
     }
+
+
+@router.post("/run-strategy")
+async def run_strategy_backtest(req: StrategyBacktestRequest):
+    """
+    Chạy backtest theo chiến lược + cặp tiền.
+    Không cần bot_id — dùng account của bot đầu tiên có sẵn.
+    """
+    # Validate ngày
+    try:
+        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"start_date không hợp lệ: {req.start_date}")
+    if req.end_date:
+        try:
+            end_dt_check = datetime.strptime(req.end_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"end_date không hợp lệ: {req.end_date}")
+        if start_dt >= end_dt_check:
+            raise HTTPException(status_code=400, detail="start_date phải trước end_date")
+
+    # Lấy account từ bot đầu tiên có sẵn
+    async with get_db() as db:
+        result = await db.execute(
+            select(Bot).where(Bot.is_deleted == False, Bot.status == "running").limit(1)
+        )
+        ref_bot = result.scalar_one_or_none()
+        if not ref_bot:
+            result2 = await db.execute(select(Bot).where(Bot.is_deleted == False).limit(1))
+            ref_bot = result2.scalar_one_or_none()
+
+        account = None
+        if ref_bot and ref_bot.account_id:
+            acc_result = await db.execute(
+                select(ExchangeAccount).where(ExchangeAccount.id == ref_bot.account_id)
+            )
+            account = acc_result.scalar_one_or_none()
+
+    # Build params từ request — dùng mặc định của chiến lược nếu không điền
+    STRATEGY_DEFAULTS = {
+        "sma_macd_cross":    {"bb_length": 200, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1},
+        "sma_macd_cross_v2": {"bb_length": 150, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "use_trend_filter": True},
+        "sma_macd_cross_v3": {"bb_length": 200, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "use_trend_filter": True, "min_ma_distance_pct": 0.1, "min_hold_candles": 3},
+        "sma_macd_cross_v4": {"bb_length": 200, "timeframe": "5m", "leverage_v4": 10, "notional_usdt": 2000.0, "stop_loss_pct": 3.0, "take_profit_pct": 3.0},
+    }
+    if req.strategy_name not in STRATEGY_DEFAULTS:
+        raise HTTPException(status_code=400, detail=f"Chiến lược không hỗ trợ: {req.strategy_name}. Chọn: {list(STRATEGY_DEFAULTS.keys())}")
+
+    params = dict(STRATEGY_DEFAULTS[req.strategy_name])
+    params.update({
+        "fast_len": 1, "slow_len": 5, "len_c": 200, "factor": 0.05,
+        "macd_fast": 12, "macd_slow": 26, "macd_signal_length": 500,
+        "macd_src": "EMA", "macd_sig_type": "EMA",
+        "lookback_candles": 600, "market_type": "futures",
+    })
+    # Override từ request nếu có
+    if req.timeframe:       params["timeframe"] = req.timeframe
+    if req.bb_length:       params["bb_length"] = req.bb_length
+    if req.use_trend_filter is not None: params["use_trend_filter"] = req.use_trend_filter
+    if req.min_ma_distance_pct is not None: params["min_ma_distance_pct"] = req.min_ma_distance_pct
+    if req.min_hold_candles is not None: params["min_hold_candles"] = req.min_hold_candles
+    if req.leverage_v4:     params["leverage_v4"] = req.leverage_v4
+    if req.notional_usdt:   params["notional_usdt"] = req.notional_usdt
+    if req.stop_loss_pct is not None:   params["stop_loss_pct"] = req.stop_loss_pct
+    if req.take_profit_pct is not None: params["take_profit_pct"] = req.take_profit_pct
+
+    # Tạo bot object giả (không lưu DB)
+    class _FakeBot:
+        strategy_name = req.strategy_name
+        parameters = params
+        symbols = [req.symbol]
+        name = f"{req.strategy_name} / {req.symbol}"
+        id = 0
+
+    fake_bot = _FakeBot()
+
+    # Tạo job và chạy
+    job_id = str(uuid.uuid4())[:8]
+    _jobs[job_id] = {"status": "running", "progress": 0, "message": "Đang khởi động...", "result": None, "error": None}
+
+    _asyncio.create_task(_run_job_strategy(job_id, fake_bot, account, req))
+    return {"job_id": job_id, "status": "running"}
+
+
+async def _run_job_strategy(job_id: str, fake_bot, account, req: StrategyBacktestRequest):
+    """Background job cho run-strategy."""
+    parameters = fake_bot.parameters
+    market_type = parameters.get("market_type", "futures")
+
+    if account:
+        exchange = BinanceExchange(
+            api_key=account.api_key, api_secret=account.api_secret,
+            mode=account.mode, market_type=market_type,
+        )
+    else:
+        exchange = create_exchange_from_env()
+        exchange.market_type = market_type
+
+    try:
+        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        start_ms = int(start_dt.timestamp() * 1000)
+        if req.end_date:
+            end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        else:
+            end_dt = datetime.now(timezone.utc)
+        end_ms = int(end_dt.timestamp() * 1000)
+        end_date_str = end_dt.strftime("%Y-%m-%d")
+
+        # Retry connect
+        connect_ok = False
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                _jobs[job_id]["message"] = f"Đang kết nối exchange (lần {attempt}/3)..."
+                await exchange.connect()
+                connect_ok = True
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 3:
+                    await _asyncio.sleep(3)
+                    if account:
+                        exchange = BinanceExchange(account.api_key, account.api_secret, account.mode, market_type)
+                    else:
+                        exchange = create_exchange_from_env()
+                        exchange.market_type = market_type
+        if not connect_ok:
+            raise ValueError(f"Không thể kết nối exchange: {last_err}")
+
+        result = await _run_backtest_engine(
+            bot=fake_bot, exchange=exchange,
+            start_ms=start_ms, end_ms=end_ms,
+            initial_balance=req.initial_balance,
+            job_id=job_id,
+        )
+        await exchange.close()
+
+        _jobs[job_id]["message"] = "Đang xuất Excel..."
+        _jobs[job_id]["progress"] = 95
+
+        symbol_safe = result["symbol"].replace("/", "")
+        tf_safe = result["timeframe"]
+        start_safe = req.start_date.replace("-", "")
+        end_safe = end_date_str.replace("-", "")
+        filename = f"backtest_{req.strategy_name}_{symbol_safe}_{tf_safe}_{start_safe}_{end_safe}.xlsx"
+        filepath = os.path.join(BACKTEST_DIR, filename)
+        _create_excel(bot=fake_bot, result=result, start_date=req.start_date, end_date=end_date_str, filepath=filepath)
+
+        _jobs[job_id].update({
+            "status": "done", "progress": 100,
+            "message": f"Hoàn tất — {result['summary']['total_trades']} lệnh",
+            "result": {
+                "success": True,
+                "strategy_name": req.strategy_name,
+                "symbol": result["symbol"], "timeframe": result["timeframe"],
+                "start_date": req.start_date, "end_date": end_date_str,
+                "initial_balance": req.initial_balance,
+                "summary": result["summary"],
+                "trades": result["trades"],
+                "equity_curve": result["equity_curve"],
+                "excel_filename": filename,
+                "download_url": f"/api/backtest/download/{filename}",
+            },
+        })
+    except Exception as e:
+        try:
+            await exchange.close()
+        except Exception:
+            pass
+        logger.exception(f"Strategy backtest job {job_id} error: {e}")
+        _jobs[job_id].update({"status": "error", "progress": 0, "message": f"Lỗi: {type(e).__name__}: {str(e)}", "error": str(e)})
 
 
 @router.get("/download/{filename}")

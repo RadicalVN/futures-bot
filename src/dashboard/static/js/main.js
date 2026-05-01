@@ -5,7 +5,7 @@ import { loadChart, populateSymbolsDatalist, globalReset, globalRefresh, onLeftT
 import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignals, openStrategyDetail } from './strategies.js';
 import { renderIndicatorsManagement, toggleIndicator } from './indicators.js';
 import { loadTradesPage, applyTradeFilters, resetTradeFilters } from './trades.js';
-import { loadBacktestPage, runBacktest, filterBtTrades } from './backtest.js';
+import { loadBacktestPage, runBacktest, filterBtTrades, switchBtTab, onStrategyChange, runStrategyBacktest } from './backtest.js';
 
 // Expose handlers to window for HTML onclick attributes
 window.createBot = createBot;
@@ -35,6 +35,9 @@ window.resetTradeFilters = resetTradeFilters;
 
 window.runBacktest = runBacktest;
 window.filterBtTrades = filterBtTrades;
+window.switchBtTab = switchBtTab;
+window.onStrategyChange = onStrategyChange;
+window.runStrategyBacktest = runStrategyBacktest;
 
 // Global Navigation
 window.showPage = function showPage(pageId) {

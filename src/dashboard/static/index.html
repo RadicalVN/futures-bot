@@ -387,11 +387,123 @@
 
     <!-- PAGE: BACKTEST -->
     <div id="page-backtest" class="page">
-      <h2>🧪 Backtest Bot</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 20px;">Chạy backtest lịch sử cho từng bot, xuất kết quả ra file Excel.</p>
+      <h2>🧪 Backtest</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">Chạy backtest theo chiến lược hoặc bot cụ thể.</p>
 
-      <!-- Form chạy backtest -->
-      <div class="two-col" style="grid-template-columns: 380px 1fr; align-items: start;">
+      <!-- Tab switcher -->
+      <div style="display:flex; gap:10px; margin-bottom:20px;">
+        <button id="btTabStrategy" class="btn btn-primary" onclick="switchBtTab('strategy')" style="padding:8px 20px;">📊 Theo chiến lược</button>
+        <button id="btTabBot" class="btn" onclick="switchBtTab('bot')" style="padding:8px 20px; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border);">🤖 Theo bot</button>
+      </div>
+
+      <!-- FORM: Theo chiến lược -->
+      <div id="btPanelStrategy" class="two-col" style="grid-template-columns: 420px 1fr; align-items: start;">
+        <div class="card">
+          <h3>⚙️ Cấu hình Backtest</h3>
+          <form id="btStrategyForm" onsubmit="runStrategyBacktest(event)" style="margin-top:15px;">
+            <div class="form-group">
+              <label>Chiến lược:</label>
+              <select id="btStrategyName" class="form-control" required onchange="onStrategyChange()">
+                <option value="sma_macd_cross">V1 — SMA+MACD Cross (bb=200)</option>
+                <option value="sma_macd_cross_v2">V2 — V1 + Trend Filter (bb=150)</option>
+                <option value="sma_macd_cross_v3">V3 — V2 + MA Distance + Min Hold (bb=200)</option>
+                <option value="sma_macd_cross_v4">V4 — V1 + SL/TP % (bb=200)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Cặp tiền:</label>
+              <input type="text" id="btSymbol" class="form-control" value="BTCUSDT" required placeholder="VD: BTCUSDT, TRUMPUSDT">
+            </div>
+            <div class="form-group">
+              <label>Từ ngày:</label>
+              <input type="date" id="btSStartDate" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label>Đến ngày <span style="color:var(--text-secondary); font-size:12px;">(để trống = đến hiện tại)</span>:</label>
+              <input type="date" id="btSEndDate" class="form-control">
+            </div>
+            <div class="form-group">
+              <label>Vốn ban đầu (USDT):</label>
+              <input type="number" id="btSBalance" class="form-control" value="10000" min="100" step="100" required>
+            </div>
+            <div class="form-group">
+              <label>Timeframe <span style="color:var(--text-secondary); font-size:12px;">(mặc định 5m)</span>:</label>
+              <select id="btSTimeframe" class="form-control">
+                <option value="">5m (mặc định)</option>
+                <option value="1m">1m</option><option value="3m">3m</option>
+                <option value="5m">5m</option><option value="15m">15m</option>
+                <option value="30m">30m</option><option value="1h">1h</option>
+                <option value="4h">4h</option><option value="1d">1d</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>bb_length (MA period) <span style="color:var(--text-secondary); font-size:12px;">(để trống = mặc định)</span>:</label>
+              <input type="number" id="btSBbLength" class="form-control" min="10" max="500" step="10" placeholder="Mặc định theo version">
+            </div>
+
+            <!-- V2/V3 params -->
+            <div id="btSV2Params" style="display:none;">
+              <div class="form-group">
+                <label>Bộ lọc trend:</label>
+                <select id="btSUseTrend" class="form-control">
+                  <option value="">Mặc định (bật)</option>
+                  <option value="true">Bật</option>
+                  <option value="false">Tắt</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- V3 params -->
+            <div id="btSV3Params" style="display:none;">
+              <div class="form-group">
+                <label>Min MA distance % <span style="color:var(--text-secondary); font-size:12px;">(mặc định 0.1%)</span>:</label>
+                <input type="number" id="btSMinDist" class="form-control" min="0" max="5" step="0.05" placeholder="0.1">
+              </div>
+              <div class="form-group">
+                <label>Min hold candles <span style="color:var(--text-secondary); font-size:12px;">(mặc định 3)</span>:</label>
+                <input type="number" id="btSMinHold" class="form-control" min="0" max="50" step="1" placeholder="3">
+              </div>
+            </div>
+
+            <!-- V4 params -->
+            <div id="btSV4Params" style="display:none;">
+              <div class="form-group">
+                <label>Đòn bẩy <span style="color:var(--text-secondary); font-size:12px;">(mặc định x10)</span>:</label>
+                <input type="number" id="btSLeverage" class="form-control" min="1" max="125" step="1" placeholder="10">
+              </div>
+              <div class="form-group">
+                <label>Vốn mỗi lệnh (USDT) <span style="color:var(--text-secondary); font-size:12px;">(mặc định $2000)</span>:</label>
+                <input type="number" id="btSNotional" class="form-control" min="10" step="10" placeholder="2000">
+              </div>
+              <div class="form-group">
+                <label>% Cắt lỗ (SL) <span style="color:var(--text-secondary); font-size:12px;">(mặc định 3%)</span>:</label>
+                <input type="number" id="btSSl" class="form-control" min="0.1" max="100" step="0.1" placeholder="3">
+              </div>
+              <div class="form-group">
+                <label>% Chốt lời (TP) <span style="color:var(--text-secondary); font-size:12px;">(mặc định 3%)</span>:</label>
+                <input type="number" id="btSTp" class="form-control" min="0.1" max="100" step="0.1" placeholder="3">
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width:100%" id="btSRunBtn">▶ Chạy Backtest</button>
+          </form>
+        </div>
+
+        <!-- Kết quả -->
+        <div class="card" id="btSSummaryCard" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <div>
+              <h3>📊 Kết quả Tổng hợp</h3>
+              <div id="btSPeriodInfo" style="font-size:12px; color:var(--text-secondary); margin-top:4px;"></div>
+            </div>
+            <a id="btSDownloadLink" href="#" class="btn btn-primary btn-sm" download>⬇ Tải Excel</a>
+          </div>
+          <div id="btSSummaryGrid" class="stats-row" style="margin-bottom:0;"></div>
+        </div>
+      </div>
+
+      <!-- FORM: Theo bot (cũ) -->
+      <div id="btPanelBot" style="display:none;" class="two-col" style="grid-template-columns: 380px 1fr; align-items: start;">
         <div class="card">
           <h3>⚙️ Cấu hình Backtest</h3>
           <form id="backtestForm" onsubmit="runBacktest(event)" style="margin-top: 15px;">
@@ -415,37 +527,27 @@
               <label>Timeframe <span style="color:var(--text-secondary); font-size:12px;">(để trống = dùng TF của bot)</span>:</label>
               <select id="btTimeframe" class="form-control">
                 <option value="">-- Dùng TF của bot --</option>
-                <option value="1m">1m</option>
-                <option value="3m">3m</option>
-                <option value="5m">5m</option>
-                <option value="15m">15m</option>
-                <option value="30m">30m</option>
-                <option value="1h">1h</option>
-                <option value="2h">2h</option>
-                <option value="4h">4h</option>
-                <option value="6h">6h</option>
-                <option value="12h">12h</option>
+                <option value="1m">1m</option><option value="3m">3m</option>
+                <option value="5m">5m</option><option value="15m">15m</option>
+                <option value="30m">30m</option><option value="1h">1h</option>
+                <option value="2h">2h</option><option value="4h">4h</option>
+                <option value="6h">6h</option><option value="12h">12h</option>
                 <option value="1d">1d</option>
               </select>
             </div>
-            <!-- V4: SL/TP override — chỉ hiển thị khi bot dùng sma_macd_cross_v4 -->
             <div id="btSlTpGroup" style="display:none;">
               <div class="form-group">
-                <label>% Cắt lỗ (SL) <span style="color:var(--text-secondary); font-size:12px;">(để trống = dùng từ bot)</span>:</label>
+                <label>% Cắt lỗ (SL):</label>
                 <input type="number" id="btSlPct" class="form-control" min="0.1" max="100" step="0.1" placeholder="VD: 3">
               </div>
               <div class="form-group">
-                <label>% Chốt lời (TP) <span style="color:var(--text-secondary); font-size:12px;">(để trống = dùng từ bot)</span>:</label>
+                <label>% Chốt lời (TP):</label>
                 <input type="number" id="btTpPct" class="form-control" min="0.1" max="100" step="0.1" placeholder="VD: 3">
               </div>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%" id="btRunBtn">
-              ▶ Chạy Backtest
-            </button>
+            <button type="submit" class="btn btn-primary" style="width:100%" id="btRunBtn">▶ Chạy Backtest</button>
           </form>
         </div>
-
-        <!-- Kết quả tổng hợp -->
         <div class="card" id="btSummaryCard" style="display:none;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
             <div>
@@ -458,19 +560,18 @@
         </div>
       </div>
 
-      <!-- Loading indicator -->
+      <!-- Loading indicator (dùng chung) -->
       <div id="btLoading" style="display:none; text-align:center; padding:40px; color:var(--text-secondary);">
         <div style="font-size:32px; margin-bottom:10px;">⏳</div>
         <div>Đang chạy backtest, vui lòng chờ...</div>
         <div style="font-size:12px; margin-top:8px;">Quá trình có thể mất vài phút tùy theo khoảng thời gian</div>
-        <!-- Progress bar -->
         <div style="margin-top:20px; background:var(--border); border-radius:8px; height:12px; width:100%; max-width:500px; margin-left:auto; margin-right:auto; overflow:hidden;">
           <div id="btProgressBar" style="height:100%; width:0%; background:var(--accent); border-radius:8px; transition:width 0.4s ease;"></div>
         </div>
         <div id="btProgressText" style="margin-top:8px; font-size:13px; color:var(--accent);">0% — Đang khởi động...</div>
       </div>
 
-      <!-- Equity Curve Chart -->
+      <!-- Equity Curve Chart (dùng chung) -->
       <div class="card" id="btEquityCard" style="display:none; margin-top:20px;">
         <h3>📈 Đường vốn (Equity Curve)</h3>
         <div style="height:280px; position:relative; margin-top:15px;">
@@ -478,7 +579,7 @@
         </div>
       </div>
 
-      <!-- Trade list -->
+      <!-- Trade list (dùng chung) -->
       <div class="card" id="btTradesCard" style="display:none; margin-top:20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
           <h3>📋 Chi tiết Lệnh (<span id="btTradeCount">0</span> lệnh)</h3>
@@ -495,16 +596,9 @@
           <table>
             <thead>
               <tr>
-                <th>#</th>
-                <th>Vào lệnh</th>
-                <th>Ra lệnh</th>
-                <th>Side</th>
-                <th>Giá vào</th>
-                <th>Giá ra</th>
-                <th>PnL (USDT)</th>
-                <th>PnL (%)</th>
-                <th>Số dư sau</th>
-                <th>Giữ (nến)</th>
+                <th>#</th><th>Vào lệnh</th><th>Ra lệnh</th><th>Side</th>
+                <th>Giá vào</th><th>Giá ra</th><th>PnL (USDT)</th><th>PnL (%)</th>
+                <th>Số dư sau</th><th>Giữ (nến)</th>
               </tr>
             </thead>
             <tbody id="btTradesBody"></tbody>
