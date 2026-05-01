@@ -268,24 +268,19 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         pos_ep = float((open_position.get("metadata") or {}).get("entry_price", 0) or open_position.get("entry_price", 0) or 0)
 
         if side == "long":
-            # V4: chi SL/TP, bo TH1/TH2/TH3
-            # Dung low/high de check intrabar (chinh xac hon close)
+            # V4: chi SL/TP theo % notional, bo TH1/TH2/TH3
             if stop_loss_pct > 0 and pos_ep > 0:
-                # Tinh % gia can dich = % notional / leverage
-                leverage_v4 = float(parameters.get("leverage_v4", 1))
-                sl_price_pct = stop_loss_pct / leverage_v4 / 100
-                tp_price_pct = take_profit_pct / leverage_v4 / 100
-                sl = pos_ep * (1 - sl_price_pct)
-                tp = pos_ep * (1 + tp_price_pct) if take_profit_pct > 0 else None
-                # SL: gia thap nhat cua nen cham SL
+                # TP khi PnL >= notional * tp_pct/100
+                # PnL = size * (exit - entry) = (notional/entry) * (exit - entry) = notional * price_change_pct
+                # → price_change_pct = tp_pct/100 → tp_price = entry * (1 + tp_pct/100)
+                sl = pos_ep * (1 - stop_loss_pct / 100)
+                tp = pos_ep * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None
                 if low_curr <= sl:
                     sl_exit = min(sl, close_curr)
-                    return {"type": "close_long", "price": sl_exit, "reason": f"SL {stop_loss_pct}%/x{leverage_v4:.0f}: low={low_curr:.4f}<=SL={sl:.4f}"}
-                # TP: gia cao nhat cua nen cham TP
+                    return {"type": "close_long", "price": sl_exit, "reason": f"SL: low={low_curr:.4f}<=SL={sl:.4f} (-{stop_loss_pct}% = -${pv*stop_loss_pct/100:.2f})"}
                 if tp and high_curr >= tp:
                     tp_exit = max(tp, close_curr)
-                    return {"type": "close_long", "price": tp_exit, "reason": f"TP {take_profit_pct}%/x{leverage_v4:.0f}: high={high_curr:.4f}>=TP={tp:.4f}"}
-                # V4: khong check TH1/TH2/TH3
+                    return {"type": "close_long", "price": tp_exit, "reason": f"TP: high={high_curr:.4f}>=TP={tp:.4f} (+{take_profit_pct}% = +${pv*take_profit_pct/100:.2f})"}
                 return {"type": "none", "price": close_curr}
 
             # V1/V2/V3: TH2/TH3/TH1
@@ -301,23 +296,16 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                         return {"type": "close_long", "price": exit_price, "reason": f"TH1: close<MA hold={candles_held}"}
 
         elif side == "short":
-            # V4: chi SL/TP, bo TH1/TH2/TH3
-            # Dung high/low de check intrabar
+            # V4: chi SL/TP theo % notional, bo TH1/TH2/TH3
             if stop_loss_pct > 0 and pos_ep > 0:
-                leverage_v4 = float(parameters.get("leverage_v4", 1))
-                sl_price_pct = stop_loss_pct / leverage_v4 / 100
-                tp_price_pct = take_profit_pct / leverage_v4 / 100
-                sl = pos_ep * (1 + sl_price_pct)
-                tp = pos_ep * (1 - tp_price_pct) if take_profit_pct > 0 else None
-                # SL: gia cao nhat cua nen cham SL
+                sl = pos_ep * (1 + stop_loss_pct / 100)
+                tp = pos_ep * (1 - take_profit_pct / 100) if take_profit_pct > 0 else None
                 if high_curr >= sl:
                     sl_exit = max(sl, close_curr)
-                    return {"type": "close_short", "price": sl_exit, "reason": f"SL {stop_loss_pct}%/x{leverage_v4:.0f}: high={high_curr:.4f}>=SL={sl:.4f}"}
-                # TP: gia thap nhat cua nen cham TP
+                    return {"type": "close_short", "price": sl_exit, "reason": f"SL: high={high_curr:.4f}>=SL={sl:.4f} (-{stop_loss_pct}% = -${pv*stop_loss_pct/100:.2f})"}
                 if tp and low_curr <= tp:
                     tp_exit = min(tp, close_curr)
-                    return {"type": "close_short", "price": tp_exit, "reason": f"TP {take_profit_pct}%/x{leverage_v4:.0f}: low={low_curr:.4f}<=TP={tp:.4f}"}
-                # V4: khong check TH1/TH2/TH3
+                    return {"type": "close_short", "price": tp_exit, "reason": f"TP: low={low_curr:.4f}<=TP={tp:.4f} (+{take_profit_pct}% = +${pv*take_profit_pct/100:.2f})"}
                 return {"type": "none", "price": close_curr}
 
             # V1/V2/V3: TH2/TH3/TH1
@@ -533,14 +521,22 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
                 exit_price = candle[4]
             pos = open_position
             pv = pos["position_value"]
+            # Lay leverage thuc te: V4 dung leverage_v4, cac version khac dung leverage
+            eff_leverage = float(parameters.get("leverage_v4", 0)) or leverage
             if pos["side"] == "long":
                 price_change_pct = (exit_price - pos["entry_price"]) / pos["entry_price"]
             else:
                 price_change_pct = (pos["entry_price"] - exit_price) / pos["entry_price"]
+            # gross_pnl = margin * price_change_pct * leverage = (pv/leverage) * pct * leverage = pv * pct
+            # Nhung voi V4: pv = notional, margin = pv/leverage_v4
+            # gross_pnl = margin * price_change_pct * leverage_v4 = pv * price_change_pct
+            # (cong thuc nay dung cho ca V1 va V4)
             gross_pnl = pv * price_change_pct
             exit_fee = pv * COMMISSION
             net_pnl = gross_pnl - pos["entry_fee"] - exit_fee
-            pnl_pct = net_pnl / (pv / leverage) * 100
+            # pnl_pct tinh tren margin (von thuc bo ra)
+            margin = pv / eff_leverage
+            pnl_pct = net_pnl / margin * 100 if margin > 0 else 0.0
             balance += net_pnl
             holding_candles = i - pos["entry_candle_idx"]
             trades.append({
