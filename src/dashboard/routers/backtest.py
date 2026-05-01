@@ -21,6 +21,7 @@ from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
 from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
 from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
 from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
+from src.strategies.sma_macd_cross_v5 import SmaMacdCrossV5Strategy
 router = APIRouter(prefix='/api/backtest', tags=['Backtest'])
 BACKTEST_DIR = 'data/backtest'
 COMMISSION = 0.0005
@@ -88,6 +89,8 @@ def _build_strategy(strategy_name, parameters):
         return SmaMacdCrossV3Strategy(parameters)
     elif strategy_name == "sma_macd_cross_v4":
         return SmaMacdCrossV4Strategy(parameters)
+    elif strategy_name == "sma_macd_cross_v5":
+        return SmaMacdCrossV5Strategy(parameters)
     else:
         raise ValueError(f"Unsupported strategy: {strategy_name}")
 
@@ -355,8 +358,11 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     cond3_long = (close_prev <= ma_prev) and (close_curr > ma_curr)
     cond4_long = (not use_trend_filter) or (trend_curr == 1)
     cond5_long = ma_dist_pct >= min_ma_distance_pct  # V3: khoang cach toi thieu
+    # V5: MA200 phai di ngang hoac doc len
+    ma_long_ok  = {"blue", "green", "yellow"}
+    cond6_long  = (strategy_name != "sma_macd_cross_v5") or (ma_color in ma_long_ok)
 
-    if cond1_long and cond2_long and cond3_long and cond4_long and cond5_long:
+    if cond1_long and cond2_long and cond3_long and cond4_long and cond5_long and cond6_long:
         # One-shot check
         if "long" in last_entry_phase and last_entry_phase["long"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
@@ -383,8 +389,11 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     cond3_short = (close_prev >= ma_prev) and (close_curr < ma_curr)
     cond4_short = (not use_trend_filter) or (trend_curr == -1)
     cond5_short = ma_dist_pct >= min_ma_distance_pct  # V3: khoang cach toi thieu
+    # V5: MA200 phai di ngang hoac doc xuong
+    ma_short_ok  = {"red", "orange", "yellow"}
+    cond6_short  = (strategy_name != "sma_macd_cross_v5") or (ma_color in ma_short_ok)
 
-    if cond1_short and cond2_short and cond3_short and cond4_short and cond5_short:
+    if cond1_short and cond2_short and cond3_short and cond4_short and cond5_short and cond6_short:
         # One-shot check
         if "short" in last_entry_phase and last_entry_phase["short"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
@@ -458,7 +467,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
     if strategy_name == "sma_macd_cross":
         df = _precompute_sma_macd(df, parameters)
-    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4"):
+    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5"):
         df = _precompute_sma_macd(df, parameters)
     else:
         # Fallback: dùng strategy.analyze() cho các chiến lược khác
@@ -497,7 +506,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             _update_progress(pct, f"Simulate nến {loop_idx+1}/{total_sim}...")
 
         # ── Lấy signal ────────────────────────────────────────────────────────
-        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4") and i >= 2:
+        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5") and i >= 2:
             sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters)
         else:
             # Fallback: gọi strategy.analyze() (chậm)
@@ -999,6 +1008,7 @@ async def run_strategy_backtest(req: StrategyBacktestRequest):
         "sma_macd_cross_v2": {"bb_length": 150, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "use_trend_filter": True},
         "sma_macd_cross_v3": {"bb_length": 200, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "use_trend_filter": True, "min_ma_distance_pct": 0.1, "min_hold_candles": 3},
         "sma_macd_cross_v4": {"bb_length": 200, "timeframe": "5m", "leverage_v4": 10, "notional_usdt": 2000.0, "stop_loss_pct": 3.0, "take_profit_pct": 3.0},
+        "sma_macd_cross_v5": {"bb_length": 200, "timeframe": "5m", "leverage_v4": 10, "notional_usdt": 2000.0, "stop_loss_pct": 3.0, "take_profit_pct": 3.0},
     }
     if req.strategy_name not in STRATEGY_DEFAULTS:
         raise HTTPException(status_code=400, detail=f"Chiến lược không hỗ trợ: {req.strategy_name}. Chọn: {list(STRATEGY_DEFAULTS.keys())}")

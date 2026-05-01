@@ -389,7 +389,7 @@ export function onStrategyChange() {
   const v = document.getElementById('btStrategyName').value;
   document.getElementById('btSV2Params').style.display = (v === 'sma_macd_cross_v2' || v === 'sma_macd_cross_v3') ? 'block' : 'none';
   document.getElementById('btSV3Params').style.display = (v === 'sma_macd_cross_v3') ? 'block' : 'none';
-  document.getElementById('btSV4Params').style.display = (v === 'sma_macd_cross_v4') ? 'block' : 'none';
+  document.getElementById('btSV4Params').style.display = (v === 'sma_macd_cross_v4' || v === 'sma_macd_cross_v5') ? 'block' : 'none';
 }
 
 // ── Run strategy backtest ─────────────────────────────────────────────────────
