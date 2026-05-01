@@ -198,7 +198,21 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             pnl_pct = net_pnl / (position_value / leverage) * 100
             balance += net_pnl
             holding_candles = i - pos["entry_candle_idx"]
-            trade = {"entry_time": pos["entry_ts"], "exit_time": ts_ms, "symbol": symbol, "side": pos["side"], "entry_price": pos["entry_price"], "exit_price": exit_price, "size": size, "pnl": round(net_pnl, 4), "pnl_pct": round(pnl_pct, 2), "balance_after": round(balance, 4), "holding_candles": holding_candles}
+            trade = {
+                "entry_time": _to_utc7_str(pos["entry_ts"]),
+                "exit_time":  _to_utc7_str(ts_ms),
+                "entry_ts_ms": pos["entry_ts"],   # giữ lại ms cho equity chart
+                "exit_ts_ms":  ts_ms,
+                "symbol": symbol,
+                "side": pos["side"],
+                "entry_price": pos["entry_price"],
+                "exit_price": exit_price,
+                "size": size,
+                "pnl": round(net_pnl, 4),
+                "pnl_pct": round(pnl_pct, 2),
+                "balance_after": round(balance, 4),
+                "holding_candles": holding_candles,
+            }
             trades.append(trade)
             pnl_cum = balance - initial_balance
             peak_balance = max(peak_balance, balance)
@@ -300,7 +314,7 @@ def _create_excel(bot, result, start_date, end_date, filepath):
         row = t_idx + 1
         fill = alt_fill if t_idx % 2 == 0 else None
         pnl_fill = green_fill if trade["pnl"] > 0 else red_fill
-        values = [t_idx, _to_utc7_str(trade["entry_time"]), _to_utc7_str(trade["exit_time"]), trade["symbol"], trade["side"].upper(), trade["entry_price"], trade["exit_price"], round(trade["size"], 4), trade["pnl"], trade["pnl_pct"], trade["balance_after"], trade["holding_candles"]]
+        values = [t_idx, trade["entry_time"], trade["exit_time"], trade["symbol"], trade["side"].upper(), trade["entry_price"], trade["exit_price"], round(trade["size"], 4), trade["pnl"], trade["pnl_pct"], trade["balance_after"], trade["holding_candles"]]
         for col_idx, val in enumerate(values, start=1):
             cell = ws2.cell(row=row, column=col_idx, value=val)
             if col_idx in (9, 10):
