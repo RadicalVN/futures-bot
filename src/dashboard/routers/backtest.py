@@ -349,6 +349,7 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         return {
             "type": "long", "price": entry_price,
             "metadata": {
+                "entry_price": round(entry_price, 6),   # quan trong cho V4 SL/TP
                 "ma_cross_price": round(ma_cross, 6),
                 "entry_deviation": round(deviation, 6),
                 "entry_candle_ts": curr_ts,
@@ -376,6 +377,7 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         return {
             "type": "short", "price": entry_price,
             "metadata": {
+                "entry_price": round(entry_price, 6),   # quan trong cho V4 SL/TP
                 "ma_cross_price": round(ma_cross, 6),
                 "entry_deviation": round(deviation, 6),
                 "entry_candle_ts": curr_ts,
