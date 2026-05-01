@@ -122,7 +122,7 @@ class SmaMacdCrossStrategy(BaseStrategy):
         self.slow_len    = self.get_param("slow_len", 5)
         self.len_c       = self.get_param("len_c", 200)
         self.factor      = self.get_param("factor", 0.05)
-        self.bb_length   = self.get_param("bb_length", 50)
+        self.bb_length   = self.get_param("bb_length", 200)   # MA200
         # MACD params
         self.macd_fast          = self.get_param("macd_fast", 12)
         self.macd_slow          = self.get_param("macd_slow", 26)
