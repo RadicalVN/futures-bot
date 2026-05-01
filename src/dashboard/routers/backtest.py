@@ -19,6 +19,7 @@ from src.strategies.sma_pullback import SmaPullbackStrategy
 from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
 from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
 from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
+from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
 router = APIRouter(prefix='/api/backtest', tags=['Backtest'])
 BACKTEST_DIR = 'data/backtest'
 COMMISSION = 0.0005
@@ -58,6 +59,8 @@ def _build_strategy(strategy_name, parameters):
         return SmaMacdCrossStrategy(parameters)
     elif strategy_name == "sma_macd_cross_v2":
         return SmaMacdCrossV2Strategy(parameters)
+    elif strategy_name == "sma_macd_cross_v3":
+        return SmaMacdCrossV3Strategy(parameters)
     else:
         raise ValueError(f"Unsupported strategy: {strategy_name}")
 
@@ -234,6 +237,22 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     trend_curr = int(row.get("custom_sma_trend", 0))
     use_trend_filter = parameters.get("use_trend_filter", False)  # V1: False, V2: True (set trong strategy)
 
+    # V3 params
+    min_ma_distance_pct = float(parameters.get("min_ma_distance_pct", 0.0))
+    min_hold_candles    = int(parameters.get("min_hold_candles", 0))
+
+    # Tính số nến đã giữ lệnh (cho V3 min_hold)
+    candles_held = 0
+    if open_position and min_hold_candles > 0:
+        entry_candle_ts = int((open_position.get("metadata") or {}).get("entry_candle_ts", 0) or 0)
+        if entry_candle_ts:
+            ts_arr = [int(t) for t in df["timestamp"].tolist()]
+            try:
+                entry_idx = next(idx for idx, t in enumerate(ts_arr) if t >= entry_candle_ts)
+                candles_held = i - entry_idx
+            except StopIteration:
+                candles_held = 0
+
     # ── EXIT ──────────────────────────────────────────────────────────────────
     if open_position:
         side = open_position["side"]
@@ -244,12 +263,14 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
             if sig_color in SIG_BEARISH:
                 return {"type": "close_long", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if macd_color == "red" and ma_color == "green":
-                return {"type": "close_long", "price": close_curr, "reason": "TH3: MACD đỏ + MA xanh lá"}
+                return {"type": "close_long", "price": close_curr, "reason": "TH3: MACD do + MA xanh la"}
             if close_curr < ma_curr:
-                threshold = pos_ma_cross + pos_dev
-                if close_curr < threshold:
-                    exit_price = (low_curr + ma_curr) / 2
-                    return {"type": "close_long", "price": exit_price, "reason": f"TH1: close<MA và <ngưỡng"}
+                # V3: chi exit TH1 sau min_hold_candles
+                if candles_held >= min_hold_candles:
+                    threshold = pos_ma_cross + pos_dev
+                    if close_curr < threshold:
+                        exit_price = (low_curr + ma_curr) / 2
+                        return {"type": "close_long", "price": exit_price, "reason": f"TH1: close<MA hold={candles_held}"}
 
         elif side == "short":
             if sig_color in SIG_BULLISH:
@@ -257,33 +278,40 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
             if macd_color == "blue" and ma_color == "orange":
                 return {"type": "close_short", "price": close_curr, "reason": "TH3: MACD xanh + MA cam"}
             if close_curr > ma_curr:
-                threshold = pos_ma_cross + pos_dev
-                if close_curr > threshold:
-                    exit_price = (high_curr + ma_curr) / 2
-                    return {"type": "close_short", "price": exit_price, "reason": f"TH1: close>MA và >ngưỡng"}
+                # V3: chi exit TH1 sau min_hold_candles
+                if candles_held >= min_hold_candles:
+                    threshold = pos_ma_cross + pos_dev
+                    if close_curr > threshold:
+                        exit_price = (high_curr + ma_curr) / 2
+                        return {"type": "close_short", "price": exit_price, "reason": f"TH1: close>MA hold={candles_held}"}
 
         return {"type": "none", "price": close_curr}
 
     # ── ENTRY ─────────────────────────────────────────────────────────────────
+    # Khoang cach gia-MA (V3)
+    ma_dist_pct = abs(close_curr - ma_curr) / ma_curr * 100 if ma_curr else 0
+
     # LONG
     cond1_long = sig_color in SIG_BULLISH
     cond2_long = macd_curr >= sig_curr
     cond3_long = (close_prev <= ma_prev) and (close_curr > ma_curr)
-    # V2: trend filter
     cond4_long = (not use_trend_filter) or (trend_curr == 1)
+    cond5_long = ma_dist_pct >= min_ma_distance_pct  # V3: khoang cach toi thieu
 
-    if cond1_long and cond2_long and cond3_long and cond4_long:
+    if cond1_long and cond2_long and cond3_long and cond4_long and cond5_long:
         # One-shot check
         if "long" in last_entry_phase and last_entry_phase["long"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
         ma_cross = ma_curr
         entry_price = (high_curr + ma_cross) / 2
         deviation = abs(entry_price - ma_cross)
+        curr_ts = int(df["timestamp"].iloc[i])
         return {
             "type": "long", "price": entry_price,
             "metadata": {
                 "ma_cross_price": round(ma_cross, 6),
                 "entry_deviation": round(deviation, 6),
+                "entry_candle_ts": curr_ts,
                 "sig_phase_start_ts": sig_phase_start_ts,
                 "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
                 "ma": round(ma_curr, 6), "close": round(close_curr, 6),
@@ -294,21 +322,23 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     cond1_short = sig_color in SIG_BEARISH
     cond2_short = macd_curr <= sig_curr
     cond3_short = (close_prev >= ma_prev) and (close_curr < ma_curr)
-    # V2: trend filter
     cond4_short = (not use_trend_filter) or (trend_curr == -1)
+    cond5_short = ma_dist_pct >= min_ma_distance_pct  # V3: khoang cach toi thieu
 
-    if cond1_short and cond2_short and cond3_short and cond4_short:
+    if cond1_short and cond2_short and cond3_short and cond4_short and cond5_short:
         # One-shot check
         if "short" in last_entry_phase and last_entry_phase["short"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
         ma_cross = ma_curr
         entry_price = (low_curr + ma_cross) / 2
         deviation = abs(entry_price - ma_cross)
+        curr_ts = int(df["timestamp"].iloc[i])
         return {
             "type": "short", "price": entry_price,
             "metadata": {
                 "ma_cross_price": round(ma_cross, 6),
                 "entry_deviation": round(deviation, 6),
+                "entry_candle_ts": curr_ts,
                 "sig_phase_start_ts": sig_phase_start_ts,
                 "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
                 "ma": round(ma_curr, 6), "close": round(close_curr, 6),
@@ -362,7 +392,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
     if strategy_name == "sma_macd_cross":
         df = _precompute_sma_macd(df, parameters)
-    elif strategy_name == "sma_macd_cross_v2":
+    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3"):
         df = _precompute_sma_macd(df, parameters)
     else:
         # Fallback: dùng strategy.analyze() cho các chiến lược khác
@@ -401,7 +431,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             _update_progress(pct, f"Simulate nến {loop_idx+1}/{total_sim}...")
 
         # ── Lấy signal ────────────────────────────────────────────────────────
-        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2") and i >= 2:
+        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3") and i >= 2:
             sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters)
         else:
             # Fallback: gọi strategy.analyze() (chậm)

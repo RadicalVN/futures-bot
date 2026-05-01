@@ -18,6 +18,7 @@ from src.strategies.sma_pullback import SmaPullbackStrategy
 from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
 from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
 from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
+from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount
 
@@ -238,6 +239,12 @@ class BotEngine:
                 int(self.parameters.get("macd_signal_length", 500)) + 50,
             )
             self.strategy = SmaMacdCrossV2Strategy(self.parameters)
+        elif self.strategy_name == "sma_macd_cross_v3":
+            self.lookback = max(
+                self.lookback,
+                int(self.parameters.get("macd_signal_length", 500)) + 50,
+            )
+            self.strategy = SmaMacdCrossV3Strategy(self.parameters)
         else:
             raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")
 
