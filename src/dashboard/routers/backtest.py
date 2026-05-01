@@ -18,6 +18,7 @@ from src.strategies.sma_trend_early_exit import SmaTrendEarlyExitStrategy
 from src.strategies.sma_pullback import SmaPullbackStrategy
 from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
 from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
+from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
 router = APIRouter(prefix='/api/backtest', tags=['Backtest'])
 BACKTEST_DIR = 'data/backtest'
 COMMISSION = 0.0005
@@ -55,6 +56,8 @@ def _build_strategy(strategy_name, parameters):
         return SmaAntiSidewayStrategy(parameters)
     elif strategy_name == "sma_macd_cross":
         return SmaMacdCrossStrategy(parameters)
+    elif strategy_name == "sma_macd_cross_v2":
+        return SmaMacdCrossV2Strategy(parameters)
     else:
         raise ValueError(f"Unsupported strategy: {strategy_name}")
 
@@ -204,7 +207,7 @@ def _precompute_sma_macd(df, parameters):
 
 def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters):
     """
-    Simulate 1 nến cho sma_macd_cross dùng pre-computed indicators.
+    Simulate 1 nến cho sma_macd_cross / sma_macd_cross_v2 dùng pre-computed indicators.
     Trả về signal dict: {"type": "long"|"short"|"close_long"|"close_short"|"none", "price": float, "metadata": dict}
     """
     from src.strategies.sma_macd_cross import SIG_BULLISH, SIG_BEARISH
@@ -226,6 +229,10 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
 
     phase_start_idx = int(row["_sig_phase_start_idx"])
     sig_phase_start_ts = int(df["timestamp"].iloc[phase_start_idx])
+
+    # Trend từ custom_sma (dùng cho V2 trend filter)
+    trend_curr = int(row.get("custom_sma_trend", 0))
+    use_trend_filter = parameters.get("use_trend_filter", False)  # V1: False, V2: True (set trong strategy)
 
     # ── EXIT ──────────────────────────────────────────────────────────────────
     if open_position:
@@ -262,8 +269,10 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     cond1_long = sig_color in SIG_BULLISH
     cond2_long = macd_curr >= sig_curr
     cond3_long = (close_prev <= ma_prev) and (close_curr > ma_curr)
+    # V2: trend filter
+    cond4_long = (not use_trend_filter) or (trend_curr == 1)
 
-    if cond1_long and cond2_long and cond3_long:
+    if cond1_long and cond2_long and cond3_long and cond4_long:
         # One-shot check
         if "long" in last_entry_phase and last_entry_phase["long"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
@@ -285,8 +294,10 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     cond1_short = sig_color in SIG_BEARISH
     cond2_short = macd_curr <= sig_curr
     cond3_short = (close_prev >= ma_prev) and (close_curr < ma_curr)
+    # V2: trend filter
+    cond4_short = (not use_trend_filter) or (trend_curr == -1)
 
-    if cond1_short and cond2_short and cond3_short:
+    if cond1_short and cond2_short and cond3_short and cond4_short:
         # One-shot check
         if "short" in last_entry_phase and last_entry_phase["short"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
@@ -351,6 +362,8 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
     if strategy_name == "sma_macd_cross":
         df = _precompute_sma_macd(df, parameters)
+    elif strategy_name == "sma_macd_cross_v2":
+        df = _precompute_sma_macd(df, parameters)
     else:
         # Fallback: dùng strategy.analyze() cho các chiến lược khác
         # (chậm hơn nhưng đúng)
@@ -388,7 +401,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             _update_progress(pct, f"Simulate nến {loop_idx+1}/{total_sim}...")
 
         # ── Lấy signal ────────────────────────────────────────────────────────
-        if strategy_name == "sma_macd_cross" and i >= 2:
+        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2") and i >= 2:
             sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters)
         else:
             # Fallback: gọi strategy.analyze() (chậm)
