@@ -27,7 +27,7 @@ UTC7 = timezone(timedelta(hours=7))
 class BacktestRequest(BaseModel):
     bot_id: int
     start_date: str
-    end_date: str = None
+    end_date: Optional[str] = None
     initial_balance: float = 10000.0
 
 
