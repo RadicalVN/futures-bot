@@ -1,21 +1,30 @@
 """
-sma_macd_cross_v4.py — Chiến lược V4: SMA + MACD Cross, chỉ dùng SL/TP theo %
+sma_macd_cross_v4.py — Chiến lược V4: SMA + MACD Cross, SL/TP theo % vốn lệnh
 
 Dựa trên V1 (sma_macd_cross):
-  - Entry: giữ nguyên hoàn toàn như V1 (3 điều kiện + one-shot)
-  - Exit: CHỈ dùng SL/TP theo % — bỏ hoàn toàn TH1/TH2/TH3
+  - Entry: giữ nguyên như V1 (3 điều kiện + one-shot)
+  - Exit: CHỈ dùng SL/TP theo % — bỏ TH1/TH2/TH3
 
-Tham số:
-  - stop_loss_pct (float): % cắt lỗ từ giá vào, mặc định 3.0
-  - take_profit_pct (float): % chốt lời từ giá vào, mặc định 3.0
+Tham số riêng của V4:
+  - leverage_v4 (int): đòn bẩy, mặc định 10
+  - notional_usdt (float): vốn lệnh sau đòn bẩy (USDT), mặc định 2000
+    → margin thực bỏ ra = notional_usdt / leverage_v4 = 200$
+  - stop_loss_pct (float): % cắt lỗ tính trên notional, mặc định 3.0
+    → lỗ tối đa = notional × 3% = 60$
+  - take_profit_pct (float): % chốt lời tính trên notional, mặc định 3.0
+    → lãi mục tiêu = notional × 3% = 60$
 
-LONG:
-  - SL: close <= entry_price * (1 - stop_loss_pct/100)
-  - TP: close >= entry_price * (1 + take_profit_pct/100)
+Cách tính SL/TP price từ % notional:
+  LONG:
+    sl_price = entry - (notional × sl_pct/100) / size
+    tp_price = entry + (notional × tp_pct/100) / size
+  SHORT:
+    sl_price = entry + (notional × sl_pct/100) / size
+    tp_price = entry - (notional × tp_pct/100) / size
 
-SHORT:
-  - SL: close >= entry_price * (1 + stop_loss_pct/100)
-  - TP: close <= entry_price * (1 - take_profit_pct/100)
+  Trong đó: size = notional / entry_price
+  → sl_price = entry × (1 - sl_pct/100)  [vì (notional × pct) / (notional/entry) = entry × pct]
+  → Kết quả giống % giá, nhưng ý nghĩa là % trên notional (đúng với futures)
 """
 import pandas as pd
 from src.strategies.base_strategy import BaseStrategy, StrategySignal
@@ -28,12 +37,13 @@ from src.strategies.sma_macd_cross import (
 
 class SmaMacdCrossV4Strategy(BaseStrategy):
     """
-    V4 = V1 + SL/TP theo %.
+    V4 = V1 + SL/TP theo % vốn lệnh (notional).
 
     Tham số:
-    - stop_loss_pct (float): % cắt lỗ từ giá vào, mặc định 3.0
-    - take_profit_pct (float): % chốt lời từ giá vào, mặc định 3.0
-    - (tất cả tham số V1 giữ nguyên)
+    - leverage_v4 (int): đòn bẩy, mặc định 10
+    - notional_usdt (float): vốn lệnh sau đòn bẩy (USDT), mặc định 2000
+    - stop_loss_pct (float): % cắt lỗ trên notional, mặc định 3.0
+    - take_profit_pct (float): % chốt lời trên notional, mặc định 3.0
     """
 
     def __init__(self, config: dict):
@@ -44,16 +54,43 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
         self.slow_len    = self.get_param("slow_len", 5)
         self.len_c       = self.get_param("len_c", 200)
         self.factor      = self.get_param("factor", 0.05)
-        self.bb_length   = self.get_param("bb_length", 200)   # MA200
+        self.bb_length   = self.get_param("bb_length", 200)
         # MACD params (giống V1)
         self.macd_fast          = self.get_param("macd_fast", 12)
         self.macd_slow          = self.get_param("macd_slow", 26)
         self.macd_signal_length = self.get_param("macd_signal_length", 500)
         self.macd_src           = self.get_param("macd_src", "EMA")
         self.macd_sig_type      = self.get_param("macd_sig_type", "EMA")
-        # V4: SL/TP theo %
+        # V4: position sizing + SL/TP
+        self.leverage_v4     = int(float(self.get_param("leverage_v4", 10)))
+        self.notional_usdt   = float(self.get_param("notional_usdt", 2000.0))
         self.stop_loss_pct   = float(self.get_param("stop_loss_pct", 3.0))
         self.take_profit_pct = float(self.get_param("take_profit_pct", 3.0))
+
+    def _sl_tp_prices(self, entry_price: float, side: str) -> tuple[float, float]:
+        """
+        Tính giá SL và TP từ % notional.
+
+        Với futures isolated margin:
+          PnL = size × (exit - entry) × direction
+          size = notional / entry_price
+          PnL_target = notional × pct/100
+
+          → price_change = PnL_target / size = (notional × pct/100) / (notional/entry) = entry × pct/100
+          → sl_price = entry × (1 ∓ sl_pct/100)
+          → tp_price = entry × (1 ± tp_pct/100)
+
+        Kết quả: % giá = % notional (đúng với isolated margin futures).
+        """
+        sl_pct = self.stop_loss_pct / 100
+        tp_pct = self.take_profit_pct / 100
+        if side == "long":
+            sl = entry_price * (1 - sl_pct)
+            tp = entry_price * (1 + tp_pct)
+        else:
+            sl = entry_price * (1 + sl_pct)
+            tp = entry_price * (1 - tp_pct)
+        return sl, tp
 
     async def analyze(self, symbol: str, ohlcv_data: list, current_positions: list) -> StrategySignal:
         df = pd.DataFrame(ohlcv_data, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -87,143 +124,96 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
         macd_color = _slope_color(macd_curr, macd_prev, macd_older)
         sig_phase_start_ts = _find_signal_phase_start(df, sig_color)
 
-        # Lay thong tin vi the
-        pos_side            = None
-        pos_entry_price     = 0.0
-        pos_entry_deviation = 0.0
-        pos_ma_cross_price  = 0.0
+        # Lay thong tin vi the hien tai
+        pos_side        = None
+        pos_entry_price = 0.0
 
         for pos in current_positions:
             if pos.get("symbol", "").replace("/", "") == symbol.replace("/", ""):
                 pos_side = pos.get("side", "")
-                pos_entry_price = float(pos.get("entry_price", 0) or 0)
                 meta = pos.get("metadata", {}) or {}
-                pos_entry_deviation = float(meta.get("entry_deviation", 0) or 0)
-                pos_ma_cross_price  = float(meta.get("ma_cross_price", pos_entry_price) or pos_entry_price)
-                # Uu tien lay entry_price tu metadata neu co
-                if meta.get("entry_price"):
-                    pos_entry_price = float(meta["entry_price"])
+                # Uu tien entry_price tu metadata (chinh xac hon exchange entry_price)
+                pos_entry_price = float(meta.get("entry_price", 0) or pos.get("entry_price", 0) or 0)
                 break
 
         final_signal = "none"
+        margin = self.notional_usdt / self.leverage_v4
         reason = (
             f"Wait | MA={ma_color} | Sig={sig_color} | MACD={macd_color} | "
-            f"Close={'above' if close_curr > ma_curr else 'below'} MA"
+            f"Close={'above' if close_curr > ma_curr else 'below'} MA | "
+            f"Notional=${self.notional_usdt:.0f} Lev={self.leverage_v4}x Margin=${margin:.0f}"
         )
         exit_price = close_curr
 
         # ══════════════════════════════════════════════════════════════════════
-        # EXIT LOGIC
+        # EXIT: chỉ SL/TP theo % notional
         # ══════════════════════════════════════════════════════════════════════
-        if pos_side == "long":
-            exit_reason = None
+        if pos_side == "long" and pos_entry_price > 0:
+            sl_price, tp_price = self._sl_tp_prices(pos_entry_price, "long")
+            sl_usdt = self.notional_usdt * self.stop_loss_pct / 100
+            tp_usdt = self.notional_usdt * self.take_profit_pct / 100
 
-            # Chi SL/TP theo % — bo TH1/TH2/TH3
-            if pos_entry_price > 0:
-                sl_price = pos_entry_price * (1 - self.stop_loss_pct / 100)
-                tp_price = pos_entry_price * (1 + self.take_profit_pct / 100)
-
-                if close_curr <= sl_price:
-                    exit_reason = (
-                        f"SL LONG: close={close_curr:.4f} <= SL={sl_price:.4f} "
-                        f"({self.stop_loss_pct}% tu entry={pos_entry_price:.4f})"
-                    )
-                    exit_price = close_curr
-                elif close_curr >= tp_price:
-                    exit_reason = (
-                        f"TP LONG: close={close_curr:.4f} >= TP={tp_price:.4f} "
-                        f"({self.take_profit_pct}% tu entry={pos_entry_price:.4f})"
-                    )
-                    exit_price = close_curr
-
-            if exit_reason:
+            if close_curr <= sl_price:
                 final_signal = "close_long"
-                reason = exit_reason
+                reason = (
+                    f"SL LONG: close={close_curr:.4f} <= SL={sl_price:.4f} | "
+                    f"-{self.stop_loss_pct}% notional = -${sl_usdt:.2f}"
+                )
+                exit_price = close_curr
+            elif close_curr >= tp_price:
+                final_signal = "close_long"
+                reason = (
+                    f"TP LONG: close={close_curr:.4f} >= TP={tp_price:.4f} | "
+                    f"+{self.take_profit_pct}% notional = +${tp_usdt:.2f}"
+                )
+                exit_price = close_curr
 
-        elif pos_side == "short":
-            exit_reason = None
+        elif pos_side == "short" and pos_entry_price > 0:
+            sl_price, tp_price = self._sl_tp_prices(pos_entry_price, "short")
+            sl_usdt = self.notional_usdt * self.stop_loss_pct / 100
+            tp_usdt = self.notional_usdt * self.take_profit_pct / 100
 
-            # Chi SL/TP theo % — bo TH1/TH2/TH3
-            if pos_entry_price > 0:
-                sl_price = pos_entry_price * (1 + self.stop_loss_pct / 100)
-                tp_price = pos_entry_price * (1 - self.take_profit_pct / 100)
-
-                if close_curr >= sl_price:
-                    exit_reason = (
-                        f"SL SHORT: close={close_curr:.4f} >= SL={sl_price:.4f} "
-                        f"({self.stop_loss_pct}% tu entry={pos_entry_price:.4f})"
-                    )
-                    exit_price = close_curr
-                elif close_curr <= tp_price:
-                    exit_reason = (
-                        f"TP SHORT: close={close_curr:.4f} <= TP={tp_price:.4f} "
-                        f"({self.take_profit_pct}% tu entry={pos_entry_price:.4f})"
-                    )
-                    exit_price = close_curr
-
-            if exit_reason:
+            if close_curr >= sl_price:
                 final_signal = "close_short"
-                reason = exit_reason
+                reason = (
+                    f"SL SHORT: close={close_curr:.4f} >= SL={sl_price:.4f} | "
+                    f"-{self.stop_loss_pct}% notional = -${sl_usdt:.2f}"
+                )
+                exit_price = close_curr
+            elif close_curr <= tp_price:
+                final_signal = "close_short"
+                reason = (
+                    f"TP SHORT: close={close_curr:.4f} <= TP={tp_price:.4f} | "
+                    f"+{self.take_profit_pct}% notional = +${tp_usdt:.2f}"
+                )
+                exit_price = close_curr
 
         # ══════════════════════════════════════════════════════════════════════
-        # ENTRY LOGIC (giong V1)
+        # ENTRY: giống V1
         # ══════════════════════════════════════════════════════════════════════
         elif pos_side is None:
-
-            # LONG
             c1 = sig_color in SIG_BULLISH
             c2 = macd_curr >= sig_curr
             c3 = (close_prev <= ma_prev) and (close_curr > ma_curr)
 
             if c1 and c2 and c3:
-                ma_cross = ma_curr
-                ep = (high_curr + ma_cross) / 2
-                dev = abs(ep - ma_cross)
+                ep = (high_curr + ma_curr) / 2
+                dev = abs(ep - ma_curr)
+                sl_p, tp_p = self._sl_tp_prices(ep, "long")
+                sl_usdt = self.notional_usdt * self.stop_loss_pct / 100
+                tp_usdt = self.notional_usdt * self.take_profit_pct / 100
                 return StrategySignal(
                     signal="long", symbol=symbol, price=ep,
                     reason=(
-                        f"Long V4: Sig={sig_color} | MACD>={sig_curr:.6f} | "
-                        f"Price crossed MA up | entry~{ep:.4f} | "
-                        f"SL={ep*(1-self.stop_loss_pct/100):.4f} TP={ep*(1+self.take_profit_pct/100):.4f}"
+                        f"Long V4: Sig={sig_color} | entry~{ep:.4f} | "
+                        f"Notional=${self.notional_usdt:.0f} Lev={self.leverage_v4}x | "
+                        f"SL={sl_p:.4f}(-${sl_usdt:.2f}) TP={tp_p:.4f}(+${tp_usdt:.2f})"
                     ),
                     metadata={
                         "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
                         "ma": round(ma_curr, 6), "macd": round(macd_curr, 8),
                         "macd_signal": round(sig_curr, 8), "close": round(close_curr, 6),
-                        "ma_cross_price": round(ma_cross, 6),
-                        "entry_deviation": round(dev, 6),
-                        "entry_price": round(ep, 6),  # luu de tinh SL/TP
-                        "sig_phase_start_ts": sig_phase_start_ts,
-                        "trend": int(df["custom_sma_trend"].iloc[-1]),
-                        "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
-                        "momentum": ma_color,
-                        "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
-                        "stop_loss_pct": self.stop_loss_pct,
-                        "take_profit_pct": self.take_profit_pct,
-                    }
-                )
-
-            # SHORT
-            c1s = sig_color in SIG_BEARISH
-            c2s = macd_curr <= sig_curr
-            c3s = (close_prev >= ma_prev) and (close_curr < ma_curr)
-
-            if c1s and c2s and c3s:
-                ma_cross = ma_curr
-                ep = (low_curr + ma_cross) / 2
-                dev = abs(ep - ma_cross)
-                return StrategySignal(
-                    signal="short", symbol=symbol, price=ep,
-                    reason=(
-                        f"Short V4: Sig={sig_color} | MACD<={sig_curr:.6f} | "
-                        f"Price crossed MA dn | entry~{ep:.4f} | "
-                        f"SL={ep*(1+self.stop_loss_pct/100):.4f} TP={ep*(1-self.take_profit_pct/100):.4f}"
-                    ),
-                    metadata={
-                        "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
-                        "ma": round(ma_curr, 6), "macd": round(macd_curr, 8),
-                        "macd_signal": round(sig_curr, 8), "close": round(close_curr, 6),
-                        "ma_cross_price": round(ma_cross, 6),
+                        "ma_cross_price": round(ma_curr, 6),
                         "entry_deviation": round(dev, 6),
                         "entry_price": round(ep, 6),
                         "sig_phase_start_ts": sig_phase_start_ts,
@@ -231,6 +221,44 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
                         "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
                         "momentum": ma_color,
                         "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
+                        "leverage_v4": self.leverage_v4,
+                        "notional_usdt": self.notional_usdt,
+                        "stop_loss_pct": self.stop_loss_pct,
+                        "take_profit_pct": self.take_profit_pct,
+                    }
+                )
+
+            c1s = sig_color in SIG_BEARISH
+            c2s = macd_curr <= sig_curr
+            c3s = (close_prev >= ma_prev) and (close_curr < ma_curr)
+
+            if c1s and c2s and c3s:
+                ep = (low_curr + ma_curr) / 2
+                dev = abs(ep - ma_curr)
+                sl_p, tp_p = self._sl_tp_prices(ep, "short")
+                sl_usdt = self.notional_usdt * self.stop_loss_pct / 100
+                tp_usdt = self.notional_usdt * self.take_profit_pct / 100
+                return StrategySignal(
+                    signal="short", symbol=symbol, price=ep,
+                    reason=(
+                        f"Short V4: Sig={sig_color} | entry~{ep:.4f} | "
+                        f"Notional=${self.notional_usdt:.0f} Lev={self.leverage_v4}x | "
+                        f"SL={sl_p:.4f}(-${sl_usdt:.2f}) TP={tp_p:.4f}(+${tp_usdt:.2f})"
+                    ),
+                    metadata={
+                        "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
+                        "ma": round(ma_curr, 6), "macd": round(macd_curr, 8),
+                        "macd_signal": round(sig_curr, 8), "close": round(close_curr, 6),
+                        "ma_cross_price": round(ma_curr, 6),
+                        "entry_deviation": round(dev, 6),
+                        "entry_price": round(ep, 6),
+                        "sig_phase_start_ts": sig_phase_start_ts,
+                        "trend": int(df["custom_sma_trend"].iloc[-1]),
+                        "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
+                        "momentum": ma_color,
+                        "slope_pct": round(float(df["custom_sma_slope_pct"].iloc[-1]), 4),
+                        "leverage_v4": self.leverage_v4,
+                        "notional_usdt": self.notional_usdt,
                         "stop_loss_pct": self.stop_loss_pct,
                         "take_profit_pct": self.take_profit_pct,
                     }
@@ -240,11 +268,11 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
             if not c1 and not c1s:
                 reason = f"Wait | Sig={sig_color} (need blue/green LONG, red/orange SHORT)"
             elif c1 and not c2:
-                reason = f"Wait | Sig={sig_color} ok | MACD({macd_curr:.6f}) < Signal — wait golden cross"
+                reason = f"Wait | Sig ok | MACD < Signal — wait golden cross"
             elif c1 and c2 and not c3:
                 reason = f"Wait | Sig+MACD ok | Price not crossed MA up (close={close_curr:.2f} MA={ma_curr:.2f})"
             elif c1s and not c2s:
-                reason = f"Wait | Sig={sig_color} ok | MACD({macd_curr:.6f}) > Signal — wait death cross"
+                reason = f"Wait | Sig ok | MACD > Signal — wait death cross"
             elif c1s and c2s and not c3s:
                 reason = f"Wait | Sig+MACD ok | Price not crossed MA dn (close={close_curr:.2f} MA={ma_curr:.2f})"
 

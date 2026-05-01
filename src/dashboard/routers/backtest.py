@@ -487,7 +487,12 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             entry_price = sig.get("price") or candle[4]
             if not entry_price or entry_price <= 0:
                 entry_price = candle[4]
-            position_value = balance * position_size_pct * leverage
+            # V4: dung notional_usdt co dinh thay vi % balance
+            notional_usdt = float(parameters.get("notional_usdt", 0))
+            if notional_usdt > 0:
+                position_value = notional_usdt
+            else:
+                position_value = balance * position_size_pct * leverage
             size = position_value / entry_price
             fee = position_value * COMMISSION
             open_position = {
