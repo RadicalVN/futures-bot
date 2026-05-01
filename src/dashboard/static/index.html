@@ -46,6 +46,7 @@
     <div class="nav-item" onclick="showPage('indicators')">📈 Chỉ báo kỹ thuật</div>
     <div class="nav-item" onclick="showPage('strategies')">🎯 Chiến lược giao dịch</div>
     <div class="nav-item" onclick="showPage('settings')">⚙️ Cài đặt</div>
+    <div class="nav-item" onclick="showPage('backtest')">🧪 Backtest</div>
   </aside>
 
   <!-- Main Content -->
@@ -380,6 +381,98 @@
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: BACKTEST -->
+    <div id="page-backtest" class="page">
+      <h2>🧪 Backtest Bot</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">Chạy backtest lịch sử cho từng bot, xuất kết quả ra file Excel.</p>
+
+      <!-- Form chạy backtest -->
+      <div class="two-col" style="grid-template-columns: 380px 1fr; align-items: start;">
+        <div class="card">
+          <h3>⚙️ Cấu hình Backtest</h3>
+          <form id="backtestForm" onsubmit="runBacktest(event)" style="margin-top: 15px;">
+            <div class="form-group">
+              <label>Bot:</label>
+              <select id="btBotId" class="form-control" required></select>
+            </div>
+            <div class="form-group">
+              <label>Từ ngày:</label>
+              <input type="date" id="btStartDate" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label>Đến ngày <span style="color:var(--text-secondary); font-size:12px;">(để trống = đến hiện tại)</span>:</label>
+              <input type="date" id="btEndDate" class="form-control">
+            </div>
+            <div class="form-group">
+              <label>Vốn ban đầu (USDT):</label>
+              <input type="number" id="btBalance" class="form-control" value="10000" min="100" step="100" required>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%" id="btRunBtn">
+              ▶ Chạy Backtest
+            </button>
+          </form>
+        </div>
+
+        <!-- Kết quả tổng hợp -->
+        <div class="card" id="btSummaryCard" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3>📊 Kết quả Tổng hợp</h3>
+            <a id="btDownloadLink" href="#" class="btn btn-primary btn-sm" download>⬇ Tải Excel</a>
+          </div>
+          <div id="btSummaryGrid" class="stats-row" style="margin-bottom:0;"></div>
+        </div>
+      </div>
+
+      <!-- Loading indicator -->
+      <div id="btLoading" style="display:none; text-align:center; padding:40px; color:var(--text-secondary);">
+        <div style="font-size:32px; margin-bottom:10px;">⏳</div>
+        <div>Đang chạy backtest, vui lòng chờ...</div>
+        <div style="font-size:12px; margin-top:8px;">Quá trình có thể mất vài phút tùy theo khoảng thời gian</div>
+      </div>
+
+      <!-- Equity Curve Chart -->
+      <div class="card" id="btEquityCard" style="display:none; margin-top:20px;">
+        <h3>📈 Đường vốn (Equity Curve)</h3>
+        <div style="height:280px; position:relative; margin-top:15px;">
+          <canvas id="btEquityChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Trade list -->
+      <div class="card" id="btTradesCard" style="display:none; margin-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+          <h3>📋 Chi tiết Lệnh (<span id="btTradeCount">0</span> lệnh)</h3>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <span style="font-size:12px; color:var(--text-secondary);">Hiển thị:</span>
+            <select id="btTradeFilter" class="form-control" style="width:120px; padding:5px;" onchange="filterBtTrades()">
+              <option value="all">Tất cả</option>
+              <option value="win">Thắng</option>
+              <option value="loss">Thua</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Vào lệnh</th>
+                <th>Ra lệnh</th>
+                <th>Side</th>
+                <th>Giá vào</th>
+                <th>Giá ra</th>
+                <th>PnL (USDT)</th>
+                <th>PnL (%)</th>
+                <th>Số dư sau</th>
+                <th>Giữ (nến)</th>
+              </tr>
+            </thead>
+            <tbody id="btTradesBody"></tbody>
+          </table>
         </div>
       </div>
     </div>
