@@ -270,17 +270,15 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         if side == "long":
             # V4: chi SL/TP theo % notional, bo TH1/TH2/TH3
             if stop_loss_pct > 0 and pos_ep > 0:
-                # TP khi PnL >= notional * tp_pct/100
-                # PnL = size * (exit - entry) = (notional/entry) * (exit - entry) = notional * price_change_pct
-                # → price_change_pct = tp_pct/100 → tp_price = entry * (1 + tp_pct/100)
+                notional = float(parameters.get("notional_usdt", 0)) or (float(parameters.get("position_size_pct", 0.1)) * 10000 * float(parameters.get("leverage", 5)))
                 sl = pos_ep * (1 - stop_loss_pct / 100)
                 tp = pos_ep * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None
                 if low_curr <= sl:
                     sl_exit = min(sl, close_curr)
-                    return {"type": "close_long", "price": sl_exit, "reason": f"SL: low={low_curr:.4f}<=SL={sl:.4f} (-{stop_loss_pct}% = -${pv*stop_loss_pct/100:.2f})"}
+                    return {"type": "close_long", "price": sl_exit, "reason": f"SL: low={low_curr:.4f}<=SL={sl:.4f} (-{stop_loss_pct}%=${notional*stop_loss_pct/100:.2f})"}
                 if tp and high_curr >= tp:
                     tp_exit = max(tp, close_curr)
-                    return {"type": "close_long", "price": tp_exit, "reason": f"TP: high={high_curr:.4f}>=TP={tp:.4f} (+{take_profit_pct}% = +${pv*take_profit_pct/100:.2f})"}
+                    return {"type": "close_long", "price": tp_exit, "reason": f"TP: high={high_curr:.4f}>=TP={tp:.4f} (+{take_profit_pct}%=${notional*take_profit_pct/100:.2f})"}
                 return {"type": "none", "price": close_curr}
 
             # V1/V2/V3: TH2/TH3/TH1
@@ -298,14 +296,15 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         elif side == "short":
             # V4: chi SL/TP theo % notional, bo TH1/TH2/TH3
             if stop_loss_pct > 0 and pos_ep > 0:
+                notional = float(parameters.get("notional_usdt", 0)) or (float(parameters.get("position_size_pct", 0.1)) * 10000 * float(parameters.get("leverage", 5)))
                 sl = pos_ep * (1 + stop_loss_pct / 100)
                 tp = pos_ep * (1 - take_profit_pct / 100) if take_profit_pct > 0 else None
                 if high_curr >= sl:
                     sl_exit = max(sl, close_curr)
-                    return {"type": "close_short", "price": sl_exit, "reason": f"SL: high={high_curr:.4f}>=SL={sl:.4f} (-{stop_loss_pct}% = -${pv*stop_loss_pct/100:.2f})"}
+                    return {"type": "close_short", "price": sl_exit, "reason": f"SL: high={high_curr:.4f}>=SL={sl:.4f} (-{stop_loss_pct}%=${notional*stop_loss_pct/100:.2f})"}
                 if tp and low_curr <= tp:
                     tp_exit = min(tp, close_curr)
-                    return {"type": "close_short", "price": tp_exit, "reason": f"TP: low={low_curr:.4f}<=TP={tp:.4f} (+{take_profit_pct}% = +${pv*take_profit_pct/100:.2f})"}
+                    return {"type": "close_short", "price": tp_exit, "reason": f"TP: low={low_curr:.4f}<=TP={tp:.4f} (+{take_profit_pct}%=${notional*take_profit_pct/100:.2f})"}
                 return {"type": "none", "price": close_curr}
 
             # V1/V2/V3: TH2/TH3/TH1
