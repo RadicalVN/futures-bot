@@ -541,6 +541,13 @@ async def _run_job(job_id: str, bot, account, req):
         end_ms = int(end_dt.timestamp() * 1000)
         end_date_str = end_dt.strftime("%Y-%m-%d")
 
+        # Validate: start phải trước end
+        if start_ms >= end_ms:
+            raise ValueError(
+                f"Ngày bắt đầu ({req.start_date}) phải trước ngày kết thúc ({end_date_str}). "
+                f"Kiểm tra lại khoảng thời gian."
+            )
+
         await exchange.connect()
         result = await _run_backtest_engine(
             bot=bot, exchange=exchange,
@@ -601,6 +608,27 @@ async def _run_job(job_id: str, bot, account, req):
 @router.post("/run")
 async def run_backtest(req: BacktestRequest):
     """Khởi động backtest dưới dạng background job. Trả về job_id để poll progress."""
+
+    # Validate ngày trước khi tạo job
+    try:
+        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"start_date không hợp lệ: {req.start_date}")
+
+    if req.end_date:
+        try:
+            end_dt = datetime.strptime(req.end_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"end_date không hợp lệ: {req.end_date}")
+        if start_dt >= end_dt:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ngày bắt đầu ({req.start_date}) phải trước ngày kết thúc ({req.end_date})."
+            )
+
+    if req.initial_balance <= 0:
+        raise HTTPException(status_code=400, detail="Vốn ban đầu phải > 0")
+
     async with get_db() as db:
         result = await db.execute(select(Bot).where(Bot.id == req.bot_id, Bot.is_deleted == False))
         bot = result.scalar_one_or_none()
