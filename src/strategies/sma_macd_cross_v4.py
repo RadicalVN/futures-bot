@@ -69,27 +69,34 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
 
     def _sl_tp_prices(self, entry_price: float, side: str) -> tuple[float, float]:
         """
-        Tính giá SL và TP từ % notional.
+        Tính giá SL và TP từ % notional với đòn bẩy.
 
-        Với futures isolated margin:
+        Với futures isolated margin x10:
           PnL = size × (exit - entry) × direction
           size = notional / entry_price
           PnL_target = notional × pct/100
 
-          → price_change = PnL_target / size = (notional × pct/100) / (notional/entry) = entry × pct/100
-          → sl_price = entry × (1 ∓ sl_pct/100)
-          → tp_price = entry × (1 ± tp_pct/100)
+          price_change = PnL_target / size = (notional × pct/100) / (notional/entry)
+                       = entry × pct/100
 
-        Kết quả: % giá = % notional (đúng với isolated margin futures).
+          Nhưng đây là % trên NOTIONAL (đã nhân đòn bẩy).
+          Để đạt PnL = notional × pct/100, giá chỉ cần dịch:
+            price_change_pct = pct / leverage  (% trên giá)
+
+          Ví dụ: notional=$2000, leverage=10, sl_pct=3%
+            → margin = $200
+            → sl_usdt = $60 (3% × $2000)
+            → price cần dịch = $60 / size = $60 / (2000/entry) = entry × 60/2000
+                              = entry × 3% / 10 = entry × 0.3%
         """
-        sl_pct = self.stop_loss_pct / 100
-        tp_pct = self.take_profit_pct / 100
+        sl_price_pct = self.stop_loss_pct / self.leverage_v4 / 100
+        tp_price_pct = self.take_profit_pct / self.leverage_v4 / 100
         if side == "long":
-            sl = entry_price * (1 - sl_pct)
-            tp = entry_price * (1 + tp_pct)
+            sl = entry_price * (1 - sl_price_pct)
+            tp = entry_price * (1 + tp_price_pct)
         else:
-            sl = entry_price * (1 + sl_pct)
-            tp = entry_price * (1 - tp_pct)
+            sl = entry_price * (1 + sl_price_pct)
+            tp = entry_price * (1 - tp_price_pct)
         return sl, tp
 
     async def analyze(self, symbol: str, ohlcv_data: list, current_positions: list) -> StrategySignal:

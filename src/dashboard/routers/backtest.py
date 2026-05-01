@@ -271,16 +271,20 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
             # V4: chi SL/TP, bo TH1/TH2/TH3
             # Dung low/high de check intrabar (chinh xac hon close)
             if stop_loss_pct > 0 and pos_ep > 0:
-                sl = pos_ep * (1 - stop_loss_pct / 100)
-                tp = pos_ep * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None
+                # Tinh % gia can dich = % notional / leverage
+                leverage_v4 = float(parameters.get("leverage_v4", 1))
+                sl_price_pct = stop_loss_pct / leverage_v4 / 100
+                tp_price_pct = take_profit_pct / leverage_v4 / 100
+                sl = pos_ep * (1 - sl_price_pct)
+                tp = pos_ep * (1 + tp_price_pct) if take_profit_pct > 0 else None
                 # SL: gia thap nhat cua nen cham SL
                 if low_curr <= sl:
-                    sl_exit = min(sl, close_curr)  # exit tai SL hoac close neu gap
-                    return {"type": "close_long", "price": sl_exit, "reason": f"SL {stop_loss_pct}%: low={low_curr:.4f}<=SL={sl:.4f}"}
+                    sl_exit = min(sl, close_curr)
+                    return {"type": "close_long", "price": sl_exit, "reason": f"SL {stop_loss_pct}%/x{leverage_v4:.0f}: low={low_curr:.4f}<=SL={sl:.4f}"}
                 # TP: gia cao nhat cua nen cham TP
                 if tp and high_curr >= tp:
-                    tp_exit = max(tp, close_curr)  # exit tai TP hoac close neu gap
-                    return {"type": "close_long", "price": tp_exit, "reason": f"TP {take_profit_pct}%: high={high_curr:.4f}>=TP={tp:.4f}"}
+                    tp_exit = max(tp, close_curr)
+                    return {"type": "close_long", "price": tp_exit, "reason": f"TP {take_profit_pct}%/x{leverage_v4:.0f}: high={high_curr:.4f}>=TP={tp:.4f}"}
                 # V4: khong check TH1/TH2/TH3
                 return {"type": "none", "price": close_curr}
 
@@ -300,16 +304,19 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
             # V4: chi SL/TP, bo TH1/TH2/TH3
             # Dung high/low de check intrabar
             if stop_loss_pct > 0 and pos_ep > 0:
-                sl = pos_ep * (1 + stop_loss_pct / 100)
-                tp = pos_ep * (1 - take_profit_pct / 100) if take_profit_pct > 0 else None
+                leverage_v4 = float(parameters.get("leverage_v4", 1))
+                sl_price_pct = stop_loss_pct / leverage_v4 / 100
+                tp_price_pct = take_profit_pct / leverage_v4 / 100
+                sl = pos_ep * (1 + sl_price_pct)
+                tp = pos_ep * (1 - tp_price_pct) if take_profit_pct > 0 else None
                 # SL: gia cao nhat cua nen cham SL
                 if high_curr >= sl:
                     sl_exit = max(sl, close_curr)
-                    return {"type": "close_short", "price": sl_exit, "reason": f"SL {stop_loss_pct}%: high={high_curr:.4f}>=SL={sl:.4f}"}
+                    return {"type": "close_short", "price": sl_exit, "reason": f"SL {stop_loss_pct}%/x{leverage_v4:.0f}: high={high_curr:.4f}>=SL={sl:.4f}"}
                 # TP: gia thap nhat cua nen cham TP
                 if tp and low_curr <= tp:
                     tp_exit = min(tp, close_curr)
-                    return {"type": "close_short", "price": tp_exit, "reason": f"TP {take_profit_pct}%: low={low_curr:.4f}<=TP={tp:.4f}"}
+                    return {"type": "close_short", "price": tp_exit, "reason": f"TP {take_profit_pct}%/x{leverage_v4:.0f}: low={low_curr:.4f}<=TP={tp:.4f}"}
                 # V4: khong check TH1/TH2/TH3
                 return {"type": "none", "price": close_curr}
 
