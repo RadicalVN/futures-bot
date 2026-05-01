@@ -161,6 +161,11 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
     trades = []
     equity_curve = [{"ts": all_candles[start_idx][0], "balance": balance, "pnl_cum": 0.0, "drawdown_pct": 0.0}]
     peak_balance = balance
+
+    # One-shot tracking: lưu phase_start_ts của lần entry gần nhất theo side
+    # key = signal_type ("long"/"short"), value = phase_start_ts của lần đã vào
+    last_entry_phase: dict = {}  # {"long": phase_start_ts_ms, "short": phase_start_ts_ms}
+
     for i in range(start_idx, len(all_candles)):
         candle = all_candles[i]
         ts_ms = candle[0]
@@ -178,11 +183,34 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             continue
         if signal.is_entry and open_position is None:
             entry_price = signal.price if signal.price and signal.price > 0 else candle[4]
+
+            # ── One-shot check (chỉ áp dụng cho sma_macd_cross) ──────────────
+            # Mỗi phase Signal bullish/bearish chỉ được vào 1 lệnh duy nhất.
+            # Phase được xác định bởi sig_phase_start_ts trong signal.metadata.
+            if strategy_name == "sma_macd_cross":
+                sig_phase_start_ts = (signal.metadata or {}).get("sig_phase_start_ts")
+                side_key = signal.signal  # "long" | "short"
+                if sig_phase_start_ts and side_key in last_entry_phase:
+                    prev_phase_ts = last_entry_phase[side_key]
+                    if prev_phase_ts == sig_phase_start_ts:
+                        # Đã vào lệnh trong phase này rồi → skip
+                        logger.debug(
+                            f"Backtest one-shot block: {side_key.upper()} tại nến {i} "
+                            f"(phase_start={sig_phase_start_ts}, đã vào phase này rồi)"
+                        )
+                        continue
+
             position_value = balance * position_size_pct * leverage
             size = position_value / entry_price
             fee = position_value * COMMISSION
             open_position = {"side": signal.signal, "entry_price": entry_price, "size": size, "position_value": position_value, "entry_fee": fee, "entry_ts": ts_ms, "entry_candle_idx": i, "metadata": signal.metadata or {}}
             balance -= fee
+
+            # Ghi nhận phase đã vào lệnh (one-shot)
+            if strategy_name == "sma_macd_cross":
+                sig_phase_start_ts = (signal.metadata or {}).get("sig_phase_start_ts")
+                if sig_phase_start_ts:
+                    last_entry_phase[signal.signal] = sig_phase_start_ts
         elif signal.is_exit and open_position is not None:
             exit_price = signal.price if signal.price and signal.price > 0 else candle[4]
             pos = open_position
