@@ -78,12 +78,13 @@ async def serve_dashboard():
 
 
 # --- Include API Routers ---
-from src.dashboard.routers import accounts, bots, data, market
+from src.dashboard.routers import accounts, bots, data, market, backtest
 
 app.include_router(accounts.router)
 app.include_router(bots.router)
 app.include_router(data.router)
 app.include_router(market.router)
+app.include_router(backtest.router)
 
 # WebSocket Endpoint
 @app.websocket("/ws")
