@@ -29,6 +29,7 @@ class BacktestRequest(BaseModel):
     start_date: str
     end_date: Optional[str] = None
     initial_balance: float = 10000.0
+    timeframe: Optional[str] = None  # None = dùng timeframe của bot
 
 
 def _timeframe_ms(tf):
@@ -82,33 +83,48 @@ def _to_utc7_str(ts_ms):
 
 
 async def _fetch_ohlcv_range(exchange, symbol, timeframe, start_ms, end_ms):
+    """Fetch OHLCV từ start_ms đến end_ms, paginate ngược nếu cần."""
     all_candles = []
     current_end = end_ms
-    while True:
-        batch = await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=1500, params={'endTime': current_end})
+    max_iterations = 50  # safety cap
+    iteration = 0
+
+    while iteration < max_iterations:
+        iteration += 1
+        batch = await exchange.fetch_ohlcv(
+            symbol, timeframe=timeframe, limit=1500,
+            params={'endTime': current_end}
+        )
         if not batch:
             break
+
+        # Prepend batch (older candles go first)
         all_candles = batch + all_candles
         oldest_ts = batch[0][0]
+
         if oldest_ts <= start_ms:
-            break
+            break  # Đã có đủ dữ liệu từ start_ms trở đi
+
         current_end = oldest_ts - 1
         if current_end < start_ms:
             break
+
+    # Deduplicate và sort
     seen = set()
     result = []
     for c in all_candles:
-        if c[0] not in seen and c[0] >= start_ms:
+        if c[0] not in seen:
             seen.add(c[0])
             result.append(c)
     result.sort(key=lambda x: x[0])
     return result
 
 
-async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance):
+async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance, timeframe_override=None):
     strategy_name = bot.strategy_name
     parameters = bot.parameters or {}
-    timeframe = parameters.get("timeframe", "5m")
+    # Dùng timeframe override nếu có, fallback về timeframe của bot
+    timeframe = timeframe_override or parameters.get("timeframe", "5m")
     leverage = int(parameters.get("leverage", 5))
     position_size_pct = float(parameters.get("position_size_pct", 0.10))
     lookback = _get_lookback(strategy_name, parameters)
@@ -116,18 +132,28 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance)
     symbols_raw = bot.symbols or ["BTCUSDT"]
     symbol_raw = symbols_raw[0] if symbols_raw else "BTCUSDT"
     symbol = _normalize_symbol(symbol_raw)
+
     logger.info(f"Backtest: fetching OHLCV for {symbol} {timeframe} from {start_ms} to {end_ms}")
     tf_ms = _timeframe_ms(timeframe)
+
+    # Fetch từ warmup_start để có đủ nến cho indicator
     warmup_start_ms = start_ms - (lookback * tf_ms * 2)
     all_candles = await _fetch_ohlcv_range(exchange, symbol, timeframe, warmup_start_ms, end_ms)
+
     if len(all_candles) < lookback + 10:
-        raise ValueError(f"Not enough data: got {len(all_candles)} candles, need at least {lookback + 10}")
-    logger.info(f"Backtest: fetched {len(all_candles)} candles total")
-    start_idx = 0
+        raise ValueError(
+            f"Không đủ dữ liệu: có {len(all_candles)} nến, cần ít nhất {lookback + 10}. "
+            f"Thử chọn khoảng thời gian dài hơn."
+        )
+    logger.info(f"Backtest: fetched {len(all_candles)} candles total (warmup included)")
+
+    # Tìm index nến đầu tiên >= start_ms (bắt đầu simulate từ đây)
+    start_idx = lookback  # mặc định: đủ warmup
     for i, c in enumerate(all_candles):
-        if c[0] >= start_ms:
+        if c[0] >= start_ms and i >= lookback:
             start_idx = i
             break
+    # Nếu không tìm thấy nến nào >= start_ms trong range, dùng lookback
     if start_idx < lookback:
         start_idx = lookback
     balance = initial_balance
@@ -190,7 +216,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance)
     total_return_pct = round((balance - initial_balance) / initial_balance * 100, 2)
     gross_profit = sum(t["pnl"] for t in winning)
     gross_loss = abs(sum(t["pnl"] for t in losing))
-    profit_factor = round(gross_profit / gross_loss, 3) if gross_loss > 0 else float("inf")
+    profit_factor = round(gross_profit / gross_loss, 3) if gross_loss > 0 else 999.0  # cap Infinity để JSON serialize được
     avg_win = round(gross_profit / win_count, 4) if win_count > 0 else 0.0
     avg_loss = round(-gross_loss / loss_count, 4) if loss_count > 0 else 0.0
     largest_win = round(max((t["pnl"] for t in winning), default=0.0), 4)
@@ -225,6 +251,9 @@ def _create_excel(bot, result, start_date, end_date, filepath):
         from openpyxl.utils import get_column_letter
     except ImportError:
         raise ImportError("openpyxl is required. Run: pip install openpyxl>=3.1.2")
+
+    # Đảm bảo thư mục tồn tại
+    os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
     wb = openpyxl.Workbook()
     green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
@@ -297,7 +326,6 @@ def _create_excel(bot, result, start_date, end_date, filepath):
             cell = ws3.cell(row=row, column=col_idx, value=val)
             if f:
                 cell.fill = f
-    os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
     wb.save(filepath)
     logger.info(f"Excel saved: {filepath}")
 
@@ -332,23 +360,30 @@ async def run_backtest(req: BacktestRequest):
             exchange.market_type = market_type
         try:
             await exchange.connect()
-            result = await _run_backtest_engine(bot=bot, exchange=exchange, start_ms=start_ms, end_ms=end_ms, initial_balance=req.initial_balance)
+            result = await _run_backtest_engine(
+                bot=bot, exchange=exchange,
+                start_ms=start_ms, end_ms=end_ms,
+                initial_balance=req.initial_balance,
+                timeframe_override=req.timeframe or None,
+            )
         finally:
             await exchange.close()
         symbol_safe = result["symbol"].replace("/", "")
-        start_safe = req.start_date.replace("-", "")
-        end_safe = end_date_str.replace("-", "")
-        filename = f"backtest_{req.bot_id}_{symbol_safe}_{start_safe}_{end_safe}.xlsx"
+        tf_safe     = result["timeframe"].replace("m", "m").replace("h", "h")
+        start_safe  = req.start_date.replace("-", "")
+        end_safe    = end_date_str.replace("-", "")
+        filename = f"backtest_{req.bot_id}_{symbol_safe}_{tf_safe}_{start_safe}_{end_safe}.xlsx"
         filepath = os.path.join(BACKTEST_DIR, filename)
         _create_excel(bot=bot, result=result, start_date=req.start_date, end_date=end_date_str, filepath=filepath)
         return {"success": True, "bot_id": req.bot_id, "bot_name": bot.name, "symbol": result["symbol"], "timeframe": result["timeframe"], "start_date": req.start_date, "end_date": end_date_str, "initial_balance": req.initial_balance, "summary": result["summary"], "trades": result["trades"], "equity_curve": result["equity_curve"], "excel_filename": filename, "download_url": f"/api/backtest/download/{filename}"}
     except HTTPException:
         raise
     except ValueError as e:
+        logger.warning(f"Backtest validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception(f"Backtest error: {e}")
-        raise HTTPException(status_code=500, detail=f"Backtest failed: {str(e)}")
+        logger.exception(f"Backtest error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Backtest failed: {type(e).__name__}: {str(e)}")
 
 
 @router.get("/download/{filename}")

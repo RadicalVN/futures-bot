@@ -61,6 +61,7 @@ export async function runBacktest(e) {
   const startDate  = document.getElementById('btStartDate').value;
   const endDate    = document.getElementById('btEndDate').value || null;
   const balance    = parseFloat(document.getElementById('btBalance').value);
+  const timeframe  = document.getElementById('btTimeframe').value || null;
 
   if (!startDate) return showToast('Vui lòng chọn ngày bắt đầu', 'error');
 
@@ -77,6 +78,7 @@ export async function runBacktest(e) {
       start_date: startDate,
       end_date: endDate,
       initial_balance: balance,
+      timeframe: timeframe,
     });
 
     _allTrades = result.trades || [];
@@ -106,6 +108,10 @@ function _renderSummary(result) {
   const pfColor   = s.profit_factor >= 1 ? '#0ecb81' : '#f6465d';
   const srColor   = s.sharpe_ratio >= 1 ? '#0ecb81' : (s.sharpe_ratio >= 0 ? '#F0B90B' : '#f6465d');
 
+  // Hiển thị thông tin kỳ backtest
+  const tfLabel = result.timeframe || '?';
+  const periodLabel = `${result.start_date || ''} → ${result.end_date || 'nay'} | TF: ${tfLabel} | ${result.symbol}`;
+
   const metrics = [
     { label: 'Tổng lệnh',        val: s.total_trades,                    color: '' },
     { label: 'Thắng / Thua',     val: `${s.winning_trades} / ${s.losing_trades}`, color: '' },
@@ -129,6 +135,10 @@ function _renderSummary(result) {
       <div class="val" style="${m.color ? `color:${m.color}` : ''}">${m.val}</div>
     </div>
   `).join('');
+
+  // Hiển thị period info dưới tiêu đề
+  const periodEl = document.getElementById('btPeriodInfo');
+  if (periodEl) periodEl.textContent = periodLabel;
 
   // Download link
   const dl = document.getElementById('btDownloadLink');
