@@ -15,7 +15,7 @@ async function apiBots() {
   return r.json();
 }
 
-async function apiRunBacktest(payload) {
+async function apiStartBacktest(payload) {
   const r = await fetch('/api/backtest/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -25,6 +25,11 @@ async function apiRunBacktest(payload) {
     const err = await r.json().catch(() => ({ detail: r.statusText }));
     throw new Error(err.detail || 'Backtest thất bại');
   }
+  return r.json();  // { job_id, status }
+}
+
+async function apiPollProgress(jobId) {
+  const r = await fetch(`/api/backtest/progress/${jobId}`);
   return r.json();
 }
 
@@ -73,7 +78,7 @@ export async function runBacktest(e) {
   btn.textContent = '⏳ Đang chạy...';
 
   try {
-    const result = await apiRunBacktest({
+    const { job_id } = await apiStartBacktest({
       bot_id: botId,
       start_date: startDate,
       end_date: endDate,
@@ -81,18 +86,56 @@ export async function runBacktest(e) {
       timeframe: timeframe,
     });
 
-    _allTrades = result.trades || [];
-    _renderSummary(result);
-    _renderEquityChart(result.equity_curve || []);
-    _renderTrades(_allTrades);
+    // Poll progress mỗi 2s
+    await _pollJob(job_id);
 
-    showToast(`Backtest hoàn tất — ${result.summary.total_trades} lệnh`, 'success');
   } catch (err) {
     showToast(`Lỗi: ${err.message}`, 'error');
     document.getElementById('btLoading').style.display = 'none';
   } finally {
     btn.disabled = false;
     btn.textContent = '▶ Chạy Backtest';
+  }
+}
+
+async function _pollJob(jobId) {
+  const loadingEl = document.getElementById('btLoading');
+  const progressEl = document.getElementById('btProgressBar');
+  const progressTextEl = document.getElementById('btProgressText');
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));  // chờ 2s
+
+    let job;
+    try {
+      job = await apiPollProgress(jobId);
+    } catch (e) {
+      showToast('Mất kết nối khi poll progress', 'error');
+      loadingEl.style.display = 'none';
+      return;
+    }
+
+    // Cập nhật progress bar
+    if (progressEl) progressEl.style.width = `${job.progress}%`;
+    if (progressTextEl) progressTextEl.textContent = `${job.progress}% — ${job.message}`;
+
+    if (job.status === 'done') {
+      loadingEl.style.display = 'none';
+      const result = job.result;
+      _allTrades = result.trades || [];
+      _renderSummary(result);
+      _renderEquityChart(result.equity_curve || []);
+      _renderTrades(_allTrades);
+      showToast(`Backtest hoàn tất — ${result.summary.total_trades} lệnh`, 'success');
+      return;
+    }
+
+    if (job.status === 'error') {
+      loadingEl.style.display = 'none';
+      showToast(`Lỗi backtest: ${job.error}`, 'error');
+      return;
+    }
+    // status === 'running' → tiếp tục poll
   }
 }
 
