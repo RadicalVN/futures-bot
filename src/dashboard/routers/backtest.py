@@ -238,7 +238,7 @@ def _precompute_sma_macd(df, parameters):
     return df
 
 
-def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters):
+def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters, strategy_name="sma_macd_cross"):
     """
     Simulate 1 nến cho sma_macd_cross / sma_macd_cross_v2 dùng pre-computed indicators.
     Trả về signal dict: {"type": "long"|"short"|"close_long"|"close_short"|"none", "price": float, "metadata": dict}
@@ -507,7 +507,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
         # ── Lấy signal ────────────────────────────────────────────────────────
         if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5") and i >= 2:
-            sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters)
+            sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters, strategy_name)
         else:
             # Fallback: gọi strategy.analyze() (chậm)
             ohlcv_slice = all_candles[max(0, i - lookback * 2): i + 1]
