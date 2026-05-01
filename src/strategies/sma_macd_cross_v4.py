@@ -1,12 +1,13 @@
 """
-sma_macd_cross_v4.py — Chiến lược V4: SMA + MACD Cross + SL/TP theo %
+sma_macd_cross_v4.py — Chiến lược V4: SMA + MACD Cross, chỉ dùng SL/TP theo %
 
-Dựa trên V1 (sma_macd_cross), thêm:
-  - stop_loss_pct: cắt lỗ khi giá ngược chiều X% từ giá vào (mặc định 3%)
-  - take_profit_pct: chốt lời khi giá thuận chiều X% từ giá vào (mặc định 3%)
+Dựa trên V1 (sma_macd_cross):
+  - Entry: giữ nguyên hoàn toàn như V1 (3 điều kiện + one-shot)
+  - Exit: CHỈ dùng SL/TP theo % — bỏ hoàn toàn TH1/TH2/TH3
 
-SL/TP được kiểm tra TRƯỚC các điều kiện exit của chiến lược (TH1/TH2/TH3).
-Giá SL/TP tính từ entry_price lưu trong metadata.
+Tham số:
+  - stop_loss_pct (float): % cắt lỗ từ giá vào, mặc định 3.0
+  - take_profit_pct (float): % chốt lời từ giá vào, mặc định 3.0
 
 LONG:
   - SL: close <= entry_price * (1 - stop_loss_pct/100)
@@ -117,7 +118,7 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
         if pos_side == "long":
             exit_reason = None
 
-            # SL/TP uu tien cao nhat
+            # Chi SL/TP theo % — bo TH1/TH2/TH3
             if pos_entry_price > 0:
                 sl_price = pos_entry_price * (1 - self.stop_loss_pct / 100)
                 tp_price = pos_entry_price * (1 + self.take_profit_pct / 100)
@@ -135,20 +136,6 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
                     )
                     exit_price = close_curr
 
-            # Dieu kien exit chien luoc (TH1/TH2/TH3) - chi check neu chua SL/TP
-            if not exit_reason:
-                if sig_color in SIG_BEARISH:
-                    exit_reason = f"Close LONG TH2: Signal {sig_color}"
-                    exit_price = close_curr
-                elif macd_color == "red" and ma_color == "green":
-                    exit_reason = "Close LONG TH3: MACD red + MA green"
-                    exit_price = close_curr
-                elif close_curr < ma_curr:
-                    threshold = pos_ma_cross_price + pos_entry_deviation
-                    if close_curr < threshold:
-                        exit_price = (low_curr + ma_curr) / 2
-                        exit_reason = f"Close LONG TH1: close<MA | price~{exit_price:.4f}"
-
             if exit_reason:
                 final_signal = "close_long"
                 reason = exit_reason
@@ -156,7 +143,7 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
         elif pos_side == "short":
             exit_reason = None
 
-            # SL/TP uu tien cao nhat
+            # Chi SL/TP theo % — bo TH1/TH2/TH3
             if pos_entry_price > 0:
                 sl_price = pos_entry_price * (1 + self.stop_loss_pct / 100)
                 tp_price = pos_entry_price * (1 - self.take_profit_pct / 100)
@@ -173,20 +160,6 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
                         f"({self.take_profit_pct}% tu entry={pos_entry_price:.4f})"
                     )
                     exit_price = close_curr
-
-            # Dieu kien exit chien luoc
-            if not exit_reason:
-                if sig_color in SIG_BULLISH:
-                    exit_reason = f"Close SHORT TH2: Signal {sig_color}"
-                    exit_price = close_curr
-                elif macd_color == "blue" and ma_color == "orange":
-                    exit_reason = "Close SHORT TH3: MACD blue + MA orange"
-                    exit_price = close_curr
-                elif close_curr > ma_curr:
-                    threshold = pos_ma_cross_price + pos_entry_deviation
-                    if close_curr > threshold:
-                        exit_price = (high_curr + ma_curr) / 2
-                        exit_reason = f"Close SHORT TH1: close>MA | price~{exit_price:.4f}"
 
             if exit_reason:
                 final_signal = "close_short"

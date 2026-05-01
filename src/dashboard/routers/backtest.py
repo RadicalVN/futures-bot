@@ -268,7 +268,7 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         pos_ep = float((open_position.get("metadata") or {}).get("entry_price", 0) or open_position.get("entry_price", 0) or 0)
 
         if side == "long":
-            # V4: SL/TP uu tien cao nhat
+            # V4: chi SL/TP, bo TH1/TH2/TH3
             if stop_loss_pct > 0 and pos_ep > 0:
                 sl = pos_ep * (1 - stop_loss_pct / 100)
                 tp = pos_ep * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None
@@ -276,13 +276,15 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                     return {"type": "close_long", "price": close_curr, "reason": f"SL {stop_loss_pct}%: close={close_curr:.4f}<=SL={sl:.4f}"}
                 if tp and close_curr >= tp:
                     return {"type": "close_long", "price": close_curr, "reason": f"TP {take_profit_pct}%: close={close_curr:.4f}>=TP={tp:.4f}"}
+                # V4: khong check TH1/TH2/TH3
+                return {"type": "none", "price": close_curr}
 
+            # V1/V2/V3: TH2/TH3/TH1
             if sig_color in SIG_BEARISH:
                 return {"type": "close_long", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if macd_color == "red" and ma_color == "green":
                 return {"type": "close_long", "price": close_curr, "reason": "TH3: MACD do + MA xanh la"}
             if close_curr < ma_curr:
-                # V3: chi exit TH1 sau min_hold_candles
                 if candles_held >= min_hold_candles:
                     threshold = pos_ma_cross + pos_dev
                     if close_curr < threshold:
@@ -290,7 +292,7 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                         return {"type": "close_long", "price": exit_price, "reason": f"TH1: close<MA hold={candles_held}"}
 
         elif side == "short":
-            # V4: SL/TP uu tien cao nhat
+            # V4: chi SL/TP, bo TH1/TH2/TH3
             if stop_loss_pct > 0 and pos_ep > 0:
                 sl = pos_ep * (1 + stop_loss_pct / 100)
                 tp = pos_ep * (1 - take_profit_pct / 100) if take_profit_pct > 0 else None
@@ -298,13 +300,15 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                     return {"type": "close_short", "price": close_curr, "reason": f"SL {stop_loss_pct}%: close={close_curr:.4f}>=SL={sl:.4f}"}
                 if tp and close_curr <= tp:
                     return {"type": "close_short", "price": close_curr, "reason": f"TP {take_profit_pct}%: close={close_curr:.4f}<=TP={tp:.4f}"}
+                # V4: khong check TH1/TH2/TH3
+                return {"type": "none", "price": close_curr}
 
+            # V1/V2/V3: TH2/TH3/TH1
             if sig_color in SIG_BULLISH:
                 return {"type": "close_short", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if macd_color == "blue" and ma_color == "orange":
                 return {"type": "close_short", "price": close_curr, "reason": "TH3: MACD xanh + MA cam"}
             if close_curr > ma_curr:
-                # V3: chi exit TH1 sau min_hold_candles
                 if candles_held >= min_hold_candles:
                     threshold = pos_ma_cross + pos_dev
                     if close_curr > threshold:
