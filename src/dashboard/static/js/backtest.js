@@ -35,14 +35,27 @@ async function apiPollProgress(jobId) {
 
 // ── Page init ─────────────────────────────────────────────────────────────────
 
+function _onBotChange() {
+  const sel = document.getElementById('btBotId');
+  const opt = sel.options[sel.selectedIndex];
+  const strategy = opt ? opt.getAttribute('data-strategy') : '';
+  const slTpGroup = document.getElementById('btSlTpGroup');
+  if (slTpGroup) {
+    slTpGroup.style.display = strategy === 'sma_macd_cross_v4' ? 'block' : 'none';
+  }
+}
+
 export async function loadBacktestPage() {
   // Populate bot dropdown
   try {
     const bots = await apiBots();
     const sel = document.getElementById('btBotId');
     sel.innerHTML = bots.map(b =>
-      `<option value="${b.id}">#${b.id} ${b.name} (${b.strategy_name})</option>`
+      `<option value="${b.id}" data-strategy="${b.strategy_name}">#${b.id} ${b.name} (${b.strategy_name})</option>`
     ).join('');
+    // Trigger show/hide SL/TP on initial load
+    _onBotChange();
+    sel.addEventListener('change', _onBotChange);
   } catch (e) {
     showToast('Không tải được danh sách bot', 'error');
   }
@@ -67,6 +80,8 @@ export async function runBacktest(e) {
   const endDate    = document.getElementById('btEndDate').value || null;
   const balance    = parseFloat(document.getElementById('btBalance').value);
   const timeframe  = document.getElementById('btTimeframe').value || null;
+  const slPct      = document.getElementById('btSlPct')?.value ? parseFloat(document.getElementById('btSlPct').value) : null;
+  const tpPct      = document.getElementById('btTpPct')?.value ? parseFloat(document.getElementById('btTpPct').value) : null;
 
   if (!startDate) return showToast('Vui lòng chọn ngày bắt đầu', 'error');
 
@@ -84,6 +99,8 @@ export async function runBacktest(e) {
       end_date: endDate,
       initial_balance: balance,
       timeframe: timeframe,
+      stop_loss_pct: slPct,
+      take_profit_pct: tpPct,
     });
 
     // Poll progress mỗi 2s

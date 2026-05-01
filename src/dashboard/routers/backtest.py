@@ -32,7 +32,9 @@ class BacktestRequest(BaseModel):
     start_date: str
     end_date: Optional[str] = None
     initial_balance: float = 10000.0
-    timeframe: Optional[str] = None  # None = dùng timeframe của bot
+    timeframe: Optional[str] = None       # None = dùng timeframe của bot
+    stop_loss_pct: Optional[float] = None  # None = dùng từ params bot
+    take_profit_pct: Optional[float] = None
 
 
 def _timeframe_ms(tf):
@@ -385,7 +387,8 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
 
 
 async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
-                                timeframe_override=None, job_id=None):
+                                timeframe_override=None, job_id=None,
+                                sl_pct_override=None, tp_pct_override=None):
     """
     Backtest engine với pre-computed indicators (nhanh hơn ~100x).
     Cập nhật progress vào _jobs[job_id] nếu có.
@@ -398,7 +401,12 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             _jobs[job_id]["message"] = msg
 
     strategy_name = bot.strategy_name
-    parameters = bot.parameters or {}
+    parameters = dict(bot.parameters or {})
+    # Override SL/TP nếu được truyền từ request
+    if sl_pct_override is not None:
+        parameters["stop_loss_pct"] = float(sl_pct_override)
+    if tp_pct_override is not None:
+        parameters["take_profit_pct"] = float(tp_pct_override)
     timeframe = timeframe_override or parameters.get("timeframe", "5m")
     leverage = int(parameters.get("leverage", 5))
     position_size_pct = float(parameters.get("position_size_pct", 0.10))
@@ -809,6 +817,8 @@ async def _run_job(job_id: str, bot, account, req):
             start_ms=start_ms, end_ms=end_ms,
             initial_balance=req.initial_balance,
             timeframe_override=req.timeframe or None,
+            sl_pct_override=req.stop_loss_pct,
+            tp_pct_override=req.take_profit_pct,
             job_id=job_id,
         )
         await exchange.close()
