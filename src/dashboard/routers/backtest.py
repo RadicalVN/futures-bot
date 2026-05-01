@@ -514,6 +514,139 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             "equity_curve": equity_curve, "summary": summary}
 
 
+# ── Excel export ─────────────────────────────────────────────────────────────
+
+def _create_excel(bot, result, start_date, end_date, filepath):
+    try:
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise ImportError("openpyxl is required. Run: pip install openpyxl>=3.1.2")
+
+    os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+
+    wb = openpyxl.Workbook()
+    green_fill  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    red_fill    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    alt_fill    = PatternFill(start_color="DEEAF1", end_color="DEEAF1", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    bold_font   = Font(bold=True)
+
+    summary      = result["summary"]
+    trades       = result["trades"]
+    equity_curve = result["equity_curve"]
+    symbol       = result["symbol"]
+    timeframe    = result["timeframe"]
+
+    # ── Sheet 1: Tổng hợp ────────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Tong hop"
+    ws1.column_dimensions["A"].width = 32
+    ws1.column_dimensions["B"].width = 25
+
+    info_rows = [
+        ("THONG TIN BOT", ""),
+        ("Ten bot",                  bot.name),
+        ("Chien luoc",               bot.strategy_name),
+        ("Symbol",                   symbol),
+        ("Timeframe",                timeframe),
+        ("Tu ngay",                  start_date),
+        ("Den ngay",                 end_date),
+        ("Von ban dau (USDT)",       summary["initial_balance"]),
+        ("", ""),
+        ("KET QUA BACKTEST", ""),
+        ("Tong so lenh",             summary["total_trades"]),
+        ("Lenh thang",               summary["winning_trades"]),
+        ("Lenh thua",                summary["losing_trades"]),
+        ("Ti le thang (%)",          summary["win_rate"]),
+        ("Tong Pnl (USDT)",          summary["total_pnl"]),
+        ("Tong loi nhuan (%)",       summary["total_return_pct"]),
+        ("Von cuoi (USDT)",          summary["final_balance"]),
+        ("Max Drawdown (%)",         summary["max_drawdown_pct"]),
+        ("Profit Factor",            summary["profit_factor"]),
+        ("TB lenh thang (USDT)",     summary["avg_win"]),
+        ("TB lenh thua (USDT)",      summary["avg_loss"]),
+        ("Lenh thang lon nhat",      summary["largest_win"]),
+        ("Lenh thua lon nhat",       summary["largest_loss"]),
+        ("TB thoi gian giu (nen)",   summary["avg_holding_candles"]),
+        ("Sharpe Ratio",             summary["sharpe_ratio"]),
+    ]
+
+    pos_labels = {"Tong Pnl (USDT)", "Tong loi nhuan (%)", "Von cuoi (USDT)",
+                  "Profit Factor", "Sharpe Ratio", "TB lenh thang (USDT)", "Lenh thang lon nhat"}
+    neg_labels = {"Max Drawdown (%)", "TB lenh thua (USDT)", "Lenh thua lon nhat"}
+
+    for row_idx, (label, value) in enumerate(info_rows, start=1):
+        cell_a = ws1.cell(row=row_idx, column=1, value=label)
+        cell_b = ws1.cell(row=row_idx, column=2, value=value)
+        if label in ("THONG TIN BOT", "KET QUA BACKTEST"):
+            cell_a.font = header_font; cell_a.fill = header_fill
+            cell_b.fill = header_fill
+        elif label:
+            cell_a.font = bold_font
+            if isinstance(value, (int, float)):
+                if label in pos_labels:
+                    cell_b.fill = green_fill if value >= 0 else red_fill
+                elif label in neg_labels:
+                    cell_b.fill = red_fill if value != 0 else green_fill
+
+    # ── Sheet 2: Chi tiết lệnh ────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Chi tiet lenh")
+    headers2   = ["#", "Thoi gian vao", "Thoi gian ra", "Symbol", "Side",
+                  "Gia vao", "Gia ra", "So luong", "Pnl (USDT)", "Pnl (%)",
+                  "So du sau lenh", "Thoi gian giu (nen)"]
+    col_widths2 = [5, 18, 18, 12, 8, 14, 14, 12, 14, 10, 16, 18]
+    for col_idx, (h, w) in enumerate(zip(headers2, col_widths2), start=1):
+        cell = ws2.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font; cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        ws2.column_dimensions[get_column_letter(col_idx)].width = w
+
+    for t_idx, trade in enumerate(trades, start=1):
+        row      = t_idx + 1
+        fill     = alt_fill if t_idx % 2 == 0 else None
+        pnl_fill = green_fill if trade["pnl"] > 0 else red_fill
+        values   = [t_idx, trade["entry_time"], trade["exit_time"], trade["symbol"],
+                    trade["side"].upper(), trade["entry_price"], trade["exit_price"],
+                    round(trade["size"], 4), trade["pnl"], trade["pnl_pct"],
+                    trade["balance_after"], trade["holding_candles"]]
+        for col_idx, val in enumerate(values, start=1):
+            cell = ws2.cell(row=row, column=col_idx, value=val)
+            if col_idx in (9, 10):
+                cell.fill = pnl_fill
+            elif fill:
+                cell.fill = fill
+
+    # ── Sheet 3: Đường vốn ───────────────────────────────────────────────────
+    ws3 = wb.create_sheet("Duong von")
+    headers3    = ["Thoi gian", "So du", "Pnl tich luy", "Drawdown (%)"]
+    col_widths3 = [18, 16, 16, 14]
+    for col_idx, (h, w) in enumerate(zip(headers3, col_widths3), start=1):
+        cell = ws3.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font; cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        ws3.column_dimensions[get_column_letter(col_idx)].width = w
+
+    for eq_idx, eq in enumerate(equity_curve, start=1):
+        row      = eq_idx + 1
+        fill     = alt_fill if eq_idx % 2 == 0 else None
+        pnl_fill = green_fill if eq["pnl_cum"] >= 0 else red_fill
+        dd_fill  = red_fill if eq["drawdown_pct"] > 5 else (alt_fill if eq["drawdown_pct"] > 0 else None)
+        for col_idx, (val, f) in enumerate(
+            [(_to_utc7_str(eq["ts"]), fill), (eq["balance"], fill),
+             (eq["pnl_cum"], pnl_fill), (eq["drawdown_pct"], dd_fill)],
+            start=1
+        ):
+            cell = ws3.cell(row=row, column=col_idx, value=val)
+            if f:
+                cell.fill = f
+
+    wb.save(filepath)
+    logger.info(f"Excel saved: {filepath}")
+
+
 # ── Background job runner ─────────────────────────────────────────────────────
 
 async def _run_job(job_id: str, bot, account, req):
