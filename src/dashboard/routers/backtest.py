@@ -20,6 +20,7 @@ from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
 from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
 from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
 from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
+from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
 router = APIRouter(prefix='/api/backtest', tags=['Backtest'])
 BACKTEST_DIR = 'data/backtest'
 COMMISSION = 0.0005
@@ -61,6 +62,8 @@ def _build_strategy(strategy_name, parameters):
         return SmaMacdCrossV2Strategy(parameters)
     elif strategy_name == "sma_macd_cross_v3":
         return SmaMacdCrossV3Strategy(parameters)
+    elif strategy_name == "sma_macd_cross_v4":
+        return SmaMacdCrossV4Strategy(parameters)
     else:
         raise ValueError(f"Unsupported strategy: {strategy_name}")
 
@@ -240,6 +243,9 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     # V3 params
     min_ma_distance_pct = float(parameters.get("min_ma_distance_pct", 0.0))
     min_hold_candles    = int(parameters.get("min_hold_candles", 0))
+    # V4 params
+    stop_loss_pct   = float(parameters.get("stop_loss_pct", 0.0))
+    take_profit_pct = float(parameters.get("take_profit_pct", 0.0))
 
     # Tính số nến đã giữ lệnh (cho V3 min_hold)
     candles_held = 0
@@ -258,8 +264,19 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
         side = open_position["side"]
         pos_ma_cross = float((open_position.get("metadata") or {}).get("ma_cross_price", open_position["entry_price"]))
         pos_dev      = float((open_position.get("metadata") or {}).get("entry_deviation", 0))
+        # V4: lay entry_price tu metadata (chinh xac hon)
+        pos_ep = float((open_position.get("metadata") or {}).get("entry_price", 0) or open_position.get("entry_price", 0) or 0)
 
         if side == "long":
+            # V4: SL/TP uu tien cao nhat
+            if stop_loss_pct > 0 and pos_ep > 0:
+                sl = pos_ep * (1 - stop_loss_pct / 100)
+                tp = pos_ep * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None
+                if close_curr <= sl:
+                    return {"type": "close_long", "price": close_curr, "reason": f"SL {stop_loss_pct}%: close={close_curr:.4f}<=SL={sl:.4f}"}
+                if tp and close_curr >= tp:
+                    return {"type": "close_long", "price": close_curr, "reason": f"TP {take_profit_pct}%: close={close_curr:.4f}>=TP={tp:.4f}"}
+
             if sig_color in SIG_BEARISH:
                 return {"type": "close_long", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if macd_color == "red" and ma_color == "green":
@@ -273,6 +290,15 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                         return {"type": "close_long", "price": exit_price, "reason": f"TH1: close<MA hold={candles_held}"}
 
         elif side == "short":
+            # V4: SL/TP uu tien cao nhat
+            if stop_loss_pct > 0 and pos_ep > 0:
+                sl = pos_ep * (1 + stop_loss_pct / 100)
+                tp = pos_ep * (1 - take_profit_pct / 100) if take_profit_pct > 0 else None
+                if close_curr >= sl:
+                    return {"type": "close_short", "price": close_curr, "reason": f"SL {stop_loss_pct}%: close={close_curr:.4f}>=SL={sl:.4f}"}
+                if tp and close_curr <= tp:
+                    return {"type": "close_short", "price": close_curr, "reason": f"TP {take_profit_pct}%: close={close_curr:.4f}<=TP={tp:.4f}"}
+
             if sig_color in SIG_BULLISH:
                 return {"type": "close_short", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if macd_color == "blue" and ma_color == "orange":
@@ -392,7 +418,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
     if strategy_name == "sma_macd_cross":
         df = _precompute_sma_macd(df, parameters)
-    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3"):
+    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4"):
         df = _precompute_sma_macd(df, parameters)
     else:
         # Fallback: dùng strategy.analyze() cho các chiến lược khác
@@ -431,7 +457,7 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
             _update_progress(pct, f"Simulate nến {loop_idx+1}/{total_sim}...")
 
         # ── Lấy signal ────────────────────────────────────────────────────────
-        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3") and i >= 2:
+        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4") and i >= 2:
             sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters)
         else:
             # Fallback: gọi strategy.analyze() (chậm)
