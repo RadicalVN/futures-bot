@@ -153,40 +153,42 @@ class SmaMacdCrossV4Strategy(BaseStrategy):
             sl_usdt = self.notional_usdt * self.stop_loss_pct / 100
             tp_usdt = self.notional_usdt * self.take_profit_pct / 100
 
-            if close_curr <= sl_price:
+            # Dung low/high de check intrabar (chinh xac hon close)
+            if low_curr <= sl_price:
                 final_signal = "close_long"
                 reason = (
-                    f"SL LONG: close={close_curr:.4f} <= SL={sl_price:.4f} | "
+                    f"SL LONG: low={low_curr:.4f} <= SL={sl_price:.4f} | "
                     f"-{self.stop_loss_pct}% notional = -${sl_usdt:.2f}"
                 )
-                exit_price = close_curr
-            elif close_curr >= tp_price:
+                exit_price = min(sl_price, close_curr)
+            elif high_curr >= tp_price:
                 final_signal = "close_long"
                 reason = (
-                    f"TP LONG: close={close_curr:.4f} >= TP={tp_price:.4f} | "
+                    f"TP LONG: high={high_curr:.4f} >= TP={tp_price:.4f} | "
                     f"+{self.take_profit_pct}% notional = +${tp_usdt:.2f}"
                 )
-                exit_price = close_curr
+                exit_price = max(tp_price, close_curr)
 
         elif pos_side == "short" and pos_entry_price > 0:
             sl_price, tp_price = self._sl_tp_prices(pos_entry_price, "short")
             sl_usdt = self.notional_usdt * self.stop_loss_pct / 100
             tp_usdt = self.notional_usdt * self.take_profit_pct / 100
 
-            if close_curr >= sl_price:
+            # Dung high/low de check intrabar
+            if high_curr >= sl_price:
                 final_signal = "close_short"
                 reason = (
-                    f"SL SHORT: close={close_curr:.4f} >= SL={sl_price:.4f} | "
+                    f"SL SHORT: high={high_curr:.4f} >= SL={sl_price:.4f} | "
                     f"-{self.stop_loss_pct}% notional = -${sl_usdt:.2f}"
                 )
-                exit_price = close_curr
-            elif close_curr <= tp_price:
+                exit_price = max(sl_price, close_curr)
+            elif low_curr <= tp_price:
                 final_signal = "close_short"
                 reason = (
-                    f"TP SHORT: close={close_curr:.4f} <= TP={tp_price:.4f} | "
+                    f"TP SHORT: low={low_curr:.4f} <= TP={tp_price:.4f} | "
                     f"+{self.take_profit_pct}% notional = +${tp_usdt:.2f}"
                 )
-                exit_price = close_curr
+                exit_price = min(tp_price, close_curr)
 
         # ══════════════════════════════════════════════════════════════════════
         # ENTRY: giống V1
