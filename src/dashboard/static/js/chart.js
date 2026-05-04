@@ -8,6 +8,23 @@ let isFetchingOlderDataMap = {1: false, 2: false};
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
 
+/**
+ * Dừng tất cả auto-refresh intervals cho cả 2 chart.
+ * Gọi khi rời khỏi tab Dashboard để không fetch API ngầm.
+ */
+export function stopAutoRefresh() {
+    [1, 2].forEach(id => {
+        if (chartAutoRefreshIntervals[id]) {
+            clearInterval(chartAutoRefreshIntervals[id]);
+            chartAutoRefreshIntervals[id] = null;
+        }
+        if (chartTimeTrackerIntervals[id]) {
+            clearInterval(chartTimeTrackerIntervals[id]);
+            chartTimeTrackerIntervals[id] = null;
+        }
+    });
+}
+
 export async function populateSymbolsDatalist() {
   try {
     const data = await api.getSymbols();
@@ -49,7 +66,7 @@ function renderHtmlLegend(chartId) {
     const chart = chartInstances[chartId];
     if (!chart || !menu) return;
     
-    let html = '';
+    let html = `<div style="font-size: 11px; color: var(--text-secondary); padding: 2px 4px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;"><span>Chỉ báo</span><span onclick="resetHiddenStates(${chartId})" style="cursor:pointer; color: #f6465d; font-size: 11px; padding: 2px 4px;">Hiện tất cả</span></div>`;
     chart.data.datasets.forEach((ds, idx) => {
         const meta = chart.getDatasetMeta(idx);
         const isHidden = meta.hidden === null ? ds.hidden : meta.hidden;
@@ -61,6 +78,13 @@ function renderHtmlLegend(chartId) {
         else if (ds.label === 'TVT-Trend') color = '#2196F3';
         else if (ds.label === 'MACD') color = '#2196F3';
         else if (ds.label === 'MACD Signal') color = '#2196F3';
+        else if (ds.label === 'TVT-MA Slope') color = '#2196F3';
+        else if (ds.label === 'MACD Slope') color = '#2196F3';
+        else if (ds.label === 'Signal Slope') color = '#2196F3';
+        else if (ds.label === 'Signal Accel') color = '#9C27B0';
+        else if (ds.label === 'TVT-MA Accel') color = '#9C27B0';
+        else if (ds.label === 'TVT-MA-Cross') color = '#FFEB3B';
+        else if (ds.label === 'TVT-MA-Cross-N') color = '#FF9800';
         
         html += `
         <div class="legend-item" onclick="toggleDataset(${chartId}, ${idx})" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: ${isHidden ? '#666' : 'var(--text-primary)'}; text-decoration: ${isHidden ? 'line-through' : 'none'}; padding: 4px;">
@@ -69,6 +93,23 @@ function renderHtmlLegend(chartId) {
         </div>`;
     });
     menu.innerHTML = html;
+}
+
+export function resetHiddenStates(chartId) {
+    localStorage.removeItem('chartHiddenStates');
+    [1, 2].forEach(id => {
+        const chart = chartInstances[id];
+        if (!chart) return;
+        chart.data.datasets.forEach((ds, idx) => {
+            ds.hidden = false;
+            chart.getDatasetMeta(idx).hidden = false;
+        });
+        if (chart.options.scales.y_sig_slope) {
+            chart.options.scales.y_sig_slope.display = true;
+        }
+        chart.update('none');
+        renderHtmlLegend(id);
+    });
 }
 
 export function toggleDataset(chartId, datasetIndex) {
@@ -85,7 +126,15 @@ export function toggleDataset(chartId, datasetIndex) {
     let states = JSON.parse(localStorage.getItem('chartHiddenStates')) || {};
     states[ds.label] = willBeHidden;
     localStorage.setItem('chartHiddenStates', JSON.stringify(states));
-    
+
+    // Ẩn/hiện trục y_sig_slope khi cả Signal Slope lẫn Signal Accel đều bị ẩn
+    const sigSlopeDs = chart.data.datasets.find(d => d.label === 'Signal Slope');
+    const sigAccelDs = chart.data.datasets.find(d => d.label === 'Signal Accel');
+    if (sigSlopeDs && sigAccelDs && chart.options.scales.y_sig_slope) {
+        const bothHidden = sigSlopeDs.hidden && sigAccelDs.hidden;
+        chart.options.scales.y_sig_slope.display = !bothHidden;
+    }
+
     chart.update('none');
     renderHtmlLegend(chartId); // Cập nhật lại màu chữ/gạch ngang
     
@@ -99,6 +148,13 @@ export function toggleDataset(chartId, datasetIndex) {
                 otherChart.getDatasetMeta(idx).hidden = willBeHidden;
             }
         });
+        // Đồng bộ trục y_sig_slope cho biểu đồ kia
+        const otherSigSlope = otherChart.data.datasets.find(d => d.label === 'Signal Slope');
+        const otherSigAccel = otherChart.data.datasets.find(d => d.label === 'Signal Accel');
+        if (otherSigSlope && otherSigAccel && otherChart.options.scales.y_sig_slope) {
+            const bothHidden = otherSigSlope.hidden && otherSigAccel.hidden;
+            otherChart.options.scales.y_sig_slope.display = !bothHidden;
+        }
         otherChart.update('none');
         renderHtmlLegend(otherChartId);
     }
@@ -260,9 +316,33 @@ async function silentFetchChart(chartId) {
                 return { x: d.x, y: val, trend: d.sma_trend };
             });
             const macdData = newData.map(d => ({x: d.x, y: d.macd, momentum: d.macd_momentum || 'yellow'}));
-            const macdSignalData = newData.map(d => ({x: d.x, y: d.macd_signal, momentum: d.macd_sig_momentum || 'yellow'}));
+            const macdSignalData = newData.map(d => ({x: d.x, y: d.macd_signal, momentum: d.macd_sig_momentum || 'yellow', slope_pct: d.macd_sig_slope_pct}));
             const histData = newData.map(d => ({x: d.x, y: d.macd_hist, color: d.macd_hist_color || 'above_grow'}));
             const HIST_COLORS = {'above_grow':'#26A69A','above_fall':'#B2DFDB','below_grow':'#FFCDD2','below_fall':'#FF5252'};
+
+            // Slope bar data
+            function slopeBarColorArr(arr) {
+                return arr.map((v, i) => {
+                    if (i < 1 || v == null || arr[i-1] == null) return '#888';
+                    const curr = v, prev = arr[i-1], older = i >= 2 && arr[i-2] != null ? arr[i-2] : prev;
+                    if (curr === prev) return '#FFEB3B';
+                    const sc = curr - prev, sp = prev - older;
+                    if (curr > prev) return sc >= sp ? '#2196F3' : '#4CAF50';
+                    return sc <= sp ? '#f6465d' : '#FF9800';
+                });
+            }
+            const MOM_COLOR_MAP = {
+                'yellow': '#FFEB3B', 'blue': '#2196F3', 'green': '#4CAF50',
+                'orange': '#FF9800', 'red': '#f6465d', 'purple': '#9C27B0'
+            };
+            const macdYArr = newData.map(d => d.macd);
+            const sigYArr  = newData.map(d => d.macd_signal);
+            const smaBasisYArr = newData.map(d => d.sma_basis);
+            const macdSlopeData = newData.map(d => ({x: d.x, y: d.macd_slope_pct ?? null}));
+            const sigSlopeData  = newData.map(d => ({x: d.x, y: d.macd_sig_slope_pct ?? null}));
+            const smaSlopeData  = newData.map(d => ({x: d.x, y: d.sma_slope_pct ?? null, slope_pct: d.sma_slope_pct}));
+            const smaAccelData  = newData.map(d => ({x: d.x, y: d.sma_momentum_pct ?? null, momentum_pct: d.sma_momentum_pct, momentum: d.sma_momentum}));
+            const sigAccelData  = newData.map(d => ({x: d.x, y: d.macd_sig_momentum_pct ?? null, momentum_pct: d.macd_sig_momentum_pct, momentum: d.macd_sig_momentum}));
 
             function mergeData(oldData, newChunk) {
                 if (!oldData || !oldData.length) return newChunk;
@@ -274,11 +354,19 @@ async function silentFetchChart(chartId) {
                 return newChunk;
             }
 
+            // Snapshot trạng thái hidden trước khi merge để bảo toàn sau update
+            const hiddenSnapshot = {};
+            chartInstances[chartId].data.datasets.forEach((ds, idx) => {
+                const meta = chartInstances[chartId].getDatasetMeta(idx);
+                hiddenSnapshot[ds.label] = meta.hidden ?? ds.hidden ?? false;
+            });
+
             datasets.forEach(ds => {
                 if(ds.label === 'Giá') ds.data = mergeData(ds.data, newData);
                 if(ds.label === 'TVT-Trend') ds.data = mergeData(ds.data, trendData);
                 if(ds.label === 'TVT-MA') ds.data = mergeData(ds.data, smaBasisData);
                 if(ds.label === 'TVT-MA-Cross') ds.data = mergeData(ds.data, smaBasisData);
+                if(ds.label === 'TVT-MA-Cross-N') ds.data = mergeData(ds.data, smaBasisDataN);
                 if(ds.label === 'MACD') ds.data = mergeData(ds.data, macdData);
                 if(ds.label === 'MACD-Cross') ds.data = mergeData(ds.data, macdData);
                 if(ds.label === 'MACD Signal') ds.data = mergeData(ds.data, macdSignalData);
@@ -287,7 +375,36 @@ async function silentFetchChart(chartId) {
                     ds.data = mergeData(ds.data, histData);
                     ds.backgroundColor = ds.data.map(d => HIST_COLORS[d.color] || '#888');
                 }
+                if(ds.label === 'MACD Slope') {
+                    ds.data = mergeData(ds.data, macdSlopeData);
+                    ds.backgroundColor = slopeBarColorArr(ds.data.map(d => d.y));
+                }
+                if(ds.label === 'Signal Slope') {
+                    ds.data = mergeData(ds.data, sigSlopeData);
+                    ds.backgroundColor = slopeBarColorArr(sigYArr);
+                }
+                if(ds.label === 'TVT-MA Slope') {
+                    ds.data = mergeData(ds.data, smaSlopeData);
+                    ds.backgroundColor = slopeBarColorArr(smaBasisYArr);
+                }
+                if(ds.label === 'TVT-MA Accel') {
+                    ds.data = mergeData(ds.data, smaAccelData);
+                    ds.backgroundColor = newData.map(d => MOM_COLOR_MAP[d.sma_momentum] || '#888');
+                }
+                if(ds.label === 'Signal Accel') {
+                    ds.data = mergeData(ds.data, sigAccelData);
+                    ds.backgroundColor = newData.map(d => MOM_COLOR_MAP[d.macd_sig_momentum] || '#888');
+                }
             });
+
+            // Khôi phục trạng thái hidden sau khi merge
+            chartInstances[chartId].data.datasets.forEach((ds, idx) => {
+                if (hiddenSnapshot[ds.label] !== undefined) {
+                    ds.hidden = hiddenSnapshot[ds.label];
+                    chartInstances[chartId].getDatasetMeta(idx).hidden = hiddenSnapshot[ds.label];
+                }
+            });
+
             chartInstances[chartId].update('none'); // Update ngầm
         } else {
             renderChart(json.data, chartId);
@@ -356,6 +473,12 @@ async function handlePanZoom({chart}, chartId) {
                     slope_pct: d.sma_slope_pct,
                     momentum_pct: d.sma_momentum_pct
                 }));
+                const smaBasisDataN = newData.map(d => ({
+                    x: d.x,
+                    y: d.sma_basis === null ? null : d.sma_basis,
+                    momentum_n: d.sma_momentum_n,
+                    momentum_n_pct: d.sma_momentum_n_pct
+                }));
                 const trendData = newData.map(d => {
                     let val = null;
                     if (d.sma_trend === 1 && d.sma_up !== 0) val = d.sma_up;
@@ -363,13 +486,34 @@ async function handlePanZoom({chart}, chartId) {
                     return { x: d.x, y: val, trend: d.sma_trend };
                 });
                 const macdData = newData.map(d => ({x: d.x, y: d.macd}));
-                const macdSignalData = newData.map(d => ({x: d.x, y: d.macd_signal}));
-                const histData = macdData.map((d, i) => {
-                    let val = null;
-                    if (d.y !== null && macdSignalData[i] && macdSignalData[i].y !== null) {
-                        val = d.y - macdSignalData[i].y;
-                    }
-                    return { x: d.x, y: val };
+                const macdSignalData = newData.map(d => ({x: d.x, y: d.macd_signal, slope_pct: d.macd_sig_slope_pct}));
+                const histData = newData.map(d => ({x: d.x, y: d.macd_hist, color: d.macd_hist_color || 'above_grow'}));
+                const HIST_COLORS_PAN = {'above_grow':'#26A69A','above_fall':'#B2DFDB','below_grow':'#FFCDD2','below_fall':'#FF5252'};
+
+                function slopeBarColorArrPan(arr) {
+                    return arr.map((v, i) => {
+                        if (i < 1 || v == null || arr[i-1] == null) return '#888';
+                        const curr = v, prev = arr[i-1], older = i >= 2 && arr[i-2] != null ? arr[i-2] : prev;
+                        if (curr === prev) return '#FFEB3B';
+                        const sc = curr - prev, sp = prev - older;
+                        if (curr > prev) return sc >= sp ? '#2196F3' : '#4CAF50';
+                        return sc <= sp ? '#f6465d' : '#FF9800';
+                    });
+                }
+                const MOM_COLOR_MAP_PAN = {
+                    'yellow': '#FFEB3B', 'blue': '#2196F3', 'green': '#4CAF50',
+                    'orange': '#FF9800', 'red': '#f6465d', 'purple': '#9C27B0'
+                };
+                const macdSlopeDataPan = newData.map(d => ({x: d.x, y: d.macd_slope_pct ?? null}));
+                const sigSlopeDataPan  = newData.map(d => ({x: d.x, y: d.macd_sig_slope_pct ?? null}));
+                const smaAccelDataPan  = newData.map(d => ({x: d.x, y: d.sma_momentum_pct ?? null, momentum_pct: d.sma_momentum_pct, momentum: d.sma_momentum}));
+                const sigAccelDataPan  = newData.map(d => ({x: d.x, y: d.macd_sig_momentum_pct ?? null, momentum_pct: d.macd_sig_momentum_pct, momentum: d.macd_sig_momentum}));
+
+                // Snapshot trạng thái hidden trước khi concat để bảo toàn sau update
+                const hiddenSnapshotPan = {};
+                chart.data.datasets.forEach((ds, idx) => {
+                    const meta = chart.getDatasetMeta(idx);
+                    hiddenSnapshotPan[ds.label] = meta.hidden ?? ds.hidden ?? false;
                 });
 
                 datasets.forEach(ds => {
@@ -377,14 +521,45 @@ async function handlePanZoom({chart}, chartId) {
                     if(ds.label === 'TVT-Trend') ds.data = trendData.concat(ds.data);
                     if(ds.label === 'TVT-MA') ds.data = smaBasisData.concat(ds.data);
                     if(ds.label === 'TVT-MA-Cross') ds.data = smaBasisData.concat(ds.data);
+                    if(ds.label === 'TVT-MA-Cross-N') ds.data = smaBasisDataN.concat(ds.data);
                     if(ds.label === 'MACD') ds.data = macdData.concat(ds.data);
                     if(ds.label === 'MACD Signal') ds.data = macdSignalData.concat(ds.data);
                     if(ds.label === 'MACD Hist') {
                         ds.data = histData.concat(ds.data);
-                        ds.backgroundColor = ds.data.map(d => d.y !== null && d.y >= 0 ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)');
+                        ds.backgroundColor = ds.data.map(d => HIST_COLORS_PAN[d.color] || '#888');
+                    }
+                    if(ds.label === 'MACD Slope') {
+                        ds.data = macdSlopeDataPan.concat(ds.data);
+                        ds.backgroundColor = slopeBarColorArrPan(ds.data.map(d => d.y));
+                    }
+                    if(ds.label === 'Signal Slope') {
+                        ds.data = sigSlopeDataPan.concat(ds.data);
+                        ds.backgroundColor = slopeBarColorArrPan(newData.map(d => d.macd_signal)).concat(ds.backgroundColor || []);
+                    }
+                    if(ds.label === 'TVT-MA Slope') {
+                        const smaSlopeDataPan = newData.map(d => ({x: d.x, y: d.sma_slope_pct ?? null, slope_pct: d.sma_slope_pct}));
+                        ds.data = smaSlopeDataPan.concat(ds.data);
+                        const smaBasisYArrPan = newData.map(d => d.sma_basis);
+                        ds.backgroundColor = slopeBarColorArrPan(smaBasisYArrPan).concat(ds.backgroundColor || []);
+                    }
+                    if(ds.label === 'TVT-MA Accel') {
+                        ds.data = smaAccelDataPan.concat(ds.data);
+                        ds.backgroundColor = newData.map(d => MOM_COLOR_MAP_PAN[d.sma_momentum] || '#888').concat(ds.backgroundColor || []);
+                    }
+                    if(ds.label === 'Signal Accel') {
+                        ds.data = sigAccelDataPan.concat(ds.data);
+                        ds.backgroundColor = newData.map(d => MOM_COLOR_MAP_PAN[d.macd_sig_momentum] || '#888').concat(ds.backgroundColor || []);
                     }
                 });
-                
+
+                // Khôi phục trạng thái hidden sau khi concat
+                chart.data.datasets.forEach((ds, idx) => {
+                    if (hiddenSnapshotPan[ds.label] !== undefined) {
+                        ds.hidden = hiddenSnapshotPan[ds.label];
+                        chart.getDatasetMeta(idx).hidden = hiddenSnapshotPan[ds.label];
+                    }
+                });
+
                 chart.update('none'); // Update ngầm
                 
                 if(statusLabel) {
@@ -583,6 +758,83 @@ function renderChart(data, chartId) {
             borderWidth: 2,
             yAxisID: 'y' 
         });
+
+        // ── Gia tốc n phiên (TVT-MA-Cross-N) ─────────────────────────────────
+        const smaBasisDataN = data.map(d => ({
+            x: d.x,
+            y: d.sma_basis === null ? null : d.sma_basis,
+            momentum_n: d.sma_momentum_n,
+            momentum_n_pct: d.sma_momentum_n_pct
+        }));
+        datasets.push({
+            type: 'scatter',
+            label: 'TVT-MA-Cross-N',
+            data: smaBasisDataN,
+            borderColor: function(context) {
+                const mom = context.raw?.momentum_n;
+                if (!mom || mom === 'Chưa rõ') return 'transparent';
+                if (mom === 'yellow') return '#FFEB3B';
+                if (mom === 'orange') return '#FF9800';
+                if (mom === 'purple') return '#9C27B0';
+                if (mom === 'blue') return '#2196F3';
+                if (mom === 'red') return '#f6465d';
+                if (mom === 'green') return '#4CAF50';
+                return mom;
+            },
+            pointStyle: 'crossRot',
+            pointRadius: 6,
+            borderWidth: 2,
+            yAxisID: 'y'
+        });
+
+        // ── Slope bars: TVT-MA slope ──────────────────────────────────────────
+        function smaSlopeBarColor(arr, i) {
+            if (i < 1 || arr[i] == null || arr[i - 1] == null) return '#888';
+            const curr = arr[i], prev = arr[i - 1], older = i >= 2 && arr[i - 2] != null ? arr[i - 2] : prev;
+            if (curr === prev) return '#FFEB3B';
+            const sc = curr - prev, sp = prev - older;
+            if (curr > prev) return sc >= sp ? '#2196F3' : '#4CAF50';
+            return sc <= sp ? '#f6465d' : '#FF9800';
+        }
+        const smaBasisYArr = data.map(d => d.sma_basis);
+        const smaSlopeData = data.map((d, i) => ({
+            x: d.x,
+            y: d.sma_slope_pct ?? null,
+            slope_pct: d.sma_slope_pct
+        }));
+        datasets.push({
+            type: 'bar',
+            label: 'TVT-MA Slope',
+            data: smaSlopeData,
+            backgroundColor: smaBasisYArr.map((_, i) => smaSlopeBarColor(smaBasisYArr, i)),
+            borderWidth: 0,
+            barPercentage: 0.6,
+            categoryPercentage: 1.0,
+            yAxisID: 'y_sma_slope'
+        });
+
+        // ── Acceleration bars: TVT-MA gia tốc ────────────────────────────────
+        // Màu theo momentum state (6 màu), trục cùng y_sma_slope
+        const MOM_COLOR = {
+            'yellow': '#FFEB3B', 'blue': '#2196F3', 'green': '#4CAF50',
+            'orange': '#FF9800', 'red': '#f6465d', 'purple': '#9C27B0'
+        };
+        const smaAccelData = data.map(d => ({
+            x: d.x,
+            y: d.sma_momentum_pct ?? null,
+            momentum_pct: d.sma_momentum_pct,
+            momentum: d.sma_momentum
+        }));
+        datasets.push({
+            type: 'bar',
+            label: 'TVT-MA Accel',
+            data: smaAccelData,
+            backgroundColor: data.map(d => MOM_COLOR[d.sma_momentum] || '#888'),
+            borderWidth: 0,
+            barPercentage: 0.6,
+            categoryPercentage: 1.0,
+            yAxisID: 'y_sma_slope'
+        });
     }
 
     if (activeIndicatorsIds.includes('custom_macd')) {
@@ -649,7 +901,8 @@ function renderChart(data, chartId) {
         const signalWithMom = data.map(d => ({
             x: d.x,
             y: d.macd_signal,
-            momentum: d.macd_sig_momentum || 'yellow'
+            momentum: d.macd_sig_momentum || 'yellow',
+            slope_pct: d.macd_sig_slope_pct
         }));
 
         datasets.push({
@@ -681,6 +934,78 @@ function renderChart(data, chartId) {
             borderWidth: 2,
             yAxisID: 'y_macd'
         });
+
+        // ── Slope bars: MACD line slope ───────────────────────────────────────
+        // Màu cột = màu đường MACD tại nến đó (theo slopeColor logic)
+        function slopeBarColor(arr, i) {
+            if (i < 1 || arr[i] == null || arr[i - 1] == null) return '#888';
+            const curr = arr[i];
+            const prev = arr[i - 1];
+            const older = i >= 2 && arr[i - 2] != null ? arr[i - 2] : prev;
+            if (curr === prev) return '#FFEB3B';
+            const sc = curr - prev;
+            const sp = prev - older;
+            if (curr > prev) return sc >= sp ? '#2196F3' : '#4CAF50';
+            return sc <= sp ? '#f6465d' : '#FF9800';
+        }
+
+        const macdSlopeData = data.map((d, i) => ({
+            x: d.x,
+            y: d.macd_slope_pct ?? null,
+            slope_pct: d.macd_slope_pct
+        }));
+        const macdYArr = data.map(d => d.macd);
+        datasets.push({
+            type: 'bar',
+            label: 'MACD Slope',
+            data: macdSlopeData,
+            backgroundColor: macdYArr.map((_, i) => slopeBarColor(macdYArr, i)),
+            borderWidth: 0,
+            barPercentage: 0.6,
+            categoryPercentage: 1.0,
+            yAxisID: 'y_macd_slope'
+        });
+
+        // ── Slope bars: MACD Signal slope (trục trái riêng để scale lớn hơn) ──
+        const sigSlopeData = data.map((d, i) => ({
+            x: d.x,
+            y: d.macd_sig_slope_pct ?? null,
+            slope_pct: d.macd_sig_slope_pct
+        }));
+        const sigYArr = data.map(d => d.macd_signal);
+        datasets.push({
+            type: 'bar',
+            label: 'Signal Slope',
+            data: sigSlopeData,
+            backgroundColor: sigYArr.map((_, i) => slopeBarColor(sigYArr, i)),
+            borderWidth: 0,
+            barPercentage: 0.6,
+            categoryPercentage: 1.0,
+            yAxisID: 'y_sig_slope'
+        });
+
+        // ── Acceleration bars: MACD Signal gia tốc ───────────────────────────
+        // Màu theo momentum state (6 màu), trục cùng y_sig_slope
+        const SIG_MOM_COLOR = {
+            'yellow': '#FFEB3B', 'blue': '#2196F3', 'green': '#4CAF50',
+            'orange': '#FF9800', 'red': '#f6465d', 'purple': '#9C27B0'
+        };
+        const sigAccelData = data.map(d => ({
+            x: d.x,
+            y: d.macd_sig_momentum_pct ?? null,
+            momentum_pct: d.macd_sig_momentum_pct,
+            momentum: d.macd_sig_momentum
+        }));
+        datasets.push({
+            type: 'bar',
+            label: 'Signal Accel',
+            data: sigAccelData,
+            backgroundColor: data.map(d => SIG_MOM_COLOR[d.macd_sig_momentum] || '#888'),
+            borderWidth: 0,
+            barPercentage: 0.6,
+            categoryPercentage: 1.0,
+            yAxisID: 'y_sig_slope'
+        });
     }
 
     let chartScales = {
@@ -710,6 +1035,40 @@ function renderChart(data, chartId) {
                 }
             }, 
             stack: 'main', stackWeight: 1
+        };
+        // Panel slope nằm dưới MACD, hiển thị ẩn nhãn trục (bên phải — MACD slope)
+        chartScales.y_macd_slope = {
+            type: 'linear', display: true, position: 'right',
+            grid: { color: 'rgba(0,0,0,0.08)', drawOnChartArea: true },
+            ticks: {
+                color: '#333',
+                maxTicksLimit: 3,
+                callback: function(val, index, ticks) {
+                    return index === ticks.length - 1 ? '' : val.toFixed(4) + '%';
+                }
+            },
+            stack: 'main', stackWeight: 0.6
+        };
+        // Trục Signal Slope bên trái — scale độc lập để cột hiển thị lớn hơn
+        chartScales.y_sig_slope = {
+            type: 'linear', display: true, position: 'left',
+            grid: { drawOnChartArea: false },
+            ticks: {
+                color: '#2196F3',
+                maxTicksLimit: 3,
+                callback: function(val, index, ticks) {
+                    return index === ticks.length - 1 ? '' : val.toFixed(4) + '%';
+                }
+            },
+            stack: 'main', stackWeight: 0.6
+        };
+    }
+
+    // Trục slope TVT-MA: overlay trong panel giá, ẩn nhãn
+    if (activeIndicatorsIds.includes('custom_sma')) {
+        chartScales.y_sma_slope = {
+            type: 'linear', display: false, position: 'left',
+            ...(activeIndicatorsIds.includes('custom_macd') ? { stack: 'main', stackWeight: 3 } : {})
         };
     }
 
@@ -828,19 +1187,47 @@ function renderChart(data, chartId) {
     const splitPanePlugin = {
         id: 'splitPane',
         beforeDraw(chart) {
-            if (!chart.scales.y_macd) return;
             const ctx = chart.ctx;
-            const yMacdAxis = chart.scales.y_macd;
-            ctx.save();
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-            ctx.fillRect(chart.chartArea.left, yMacdAxis.top, chart.chartArea.right - chart.chartArea.left, yMacdAxis.bottom - yMacdAxis.top);
-            ctx.beginPath();
-            ctx.moveTo(chart.chartArea.left, yMacdAxis.top);
-            ctx.lineTo(chart.chartArea.right, yMacdAxis.top);
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = '#444';
-            ctx.stroke();
-            ctx.restore();
+            // Vẽ nền + đường kẻ cho panel MACD
+            if (chart.scales.y_macd) {
+                const yMacdAxis = chart.scales.y_macd;
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+                ctx.fillRect(chart.chartArea.left, yMacdAxis.top, chart.chartArea.right - chart.chartArea.left, yMacdAxis.bottom - yMacdAxis.top);
+                ctx.beginPath();
+                ctx.moveTo(chart.chartArea.left, yMacdAxis.top);
+                ctx.lineTo(chart.chartArea.right, yMacdAxis.top);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#444';
+                ctx.stroke();
+                ctx.restore();
+            }
+            // Vẽ nền + đường kẻ cho panel Slope
+            if (chart.scales.y_macd_slope) {
+                const ySlopeAxis = chart.scales.y_macd_slope;
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.10)';
+                ctx.fillRect(chart.chartArea.left, ySlopeAxis.top, chart.chartArea.right - chart.chartArea.left, ySlopeAxis.bottom - ySlopeAxis.top);
+                ctx.beginPath();
+                ctx.moveTo(chart.chartArea.left, ySlopeAxis.top);
+                ctx.lineTo(chart.chartArea.right, ySlopeAxis.top);
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#555';
+                ctx.stroke();
+                // Đường zero
+                if (!isNaN(ySlopeAxis.getPixelForValue(0))) {
+                    const zeroY = ySlopeAxis.getPixelForValue(0);
+                    ctx.beginPath();
+                    ctx.setLineDash([3, 3]);
+                    ctx.moveTo(chart.chartArea.left, zeroY);
+                    ctx.lineTo(chart.chartArea.right, zeroY);
+                    ctx.lineWidth = 1;
+                    ctx.strokeStyle = 'rgba(150,150,150,0.5)';
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+                ctx.restore();
+            }
         }
     };
 
@@ -987,6 +1374,44 @@ function renderChart(data, chartId) {
                                 const momPct = context.raw?.momentum_pct;
                                 if (momPct !== undefined && momPct !== null) {
                                     label += ` (Gia tốc: ${momPct > 0 ? '+' : ''}${momPct.toFixed(4)}%)`;
+                                }
+                            }
+                            if (context.dataset.label === 'TVT-MA-Cross-N') {
+                                const momNPct = context.raw?.momentum_n_pct;
+                                if (momNPct !== undefined && momNPct !== null) {
+                                    label += ` (Gia tốc 3p: ${momNPct > 0 ? '+' : ''}${momNPct.toFixed(4)}%)`;
+                                }
+                            }
+                            if (context.dataset.label === 'MACD Signal') {
+                                const slopePct = context.raw?.slope_pct;
+                                if (slopePct !== undefined && slopePct !== null) {
+                                    label += ` (Dốc: ${slopePct > 0 ? '+' : ''}${slopePct.toFixed(6)}%)`;
+                                }
+                            }
+                            if (context.dataset.label === 'MACD Slope' || context.dataset.label === 'Signal Slope') {
+                                const slopePct = context.raw?.slope_pct ?? context.parsed.y;
+                                if (slopePct !== undefined && slopePct !== null) {
+                                    label = context.dataset.label + `: ${slopePct > 0 ? '+' : ''}${Number(slopePct).toFixed(6)}%`;
+                                }
+                            }
+                            if (context.dataset.label === 'TVT-MA Slope') {
+                                const slopePct = context.raw?.slope_pct ?? context.parsed.y;
+                                if (slopePct !== undefined && slopePct !== null) {
+                                    label = `TVT-MA Slope: ${slopePct > 0 ? '+' : ''}${Number(slopePct).toFixed(4)}%`;
+                                }
+                            }
+                            if (context.dataset.label === 'TVT-MA Accel') {
+                                const momPct = context.raw?.momentum_pct ?? context.parsed.y;
+                                const mom = context.raw?.momentum;
+                                if (momPct !== undefined && momPct !== null) {
+                                    label = `TVT-MA Accel: ${momPct > 0 ? '+' : ''}${Number(momPct).toFixed(4)}%${mom ? ' (' + mom + ')' : ''}`;
+                                }
+                            }
+                            if (context.dataset.label === 'Signal Accel') {
+                                const momPct = context.raw?.momentum_pct ?? context.parsed.y;
+                                const mom = context.raw?.momentum;
+                                if (momPct !== undefined && momPct !== null) {
+                                    label = `Signal Accel: ${momPct > 0 ? '+' : ''}${Number(momPct).toFixed(6)}%${mom ? ' (' + mom + ')' : ''}`;
                                 }
                             }
                             return label;

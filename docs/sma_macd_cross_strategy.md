@@ -21,7 +21,6 @@
   với giá tại điểm giao nhau gần nhất của sma và đường giá.
 
 - Trường hợp đóng lệnh 2: MACD-Signal chuyển đỏ/cam → đóng ngay
-- Trường hợp đóng lệnh 3: có phiên MACD đỏ, MA xanh lá sau điểm vào lệnh → đóng ngay
 
 ---
 
@@ -42,7 +41,6 @@
   với giá tại điểm giao nhau gần nhất của sma và đường giá.
 
 - Trường hợp đóng lệnh 2: MACD-Signal chuyển xanh lá/xanh dương → đóng ngay
-- Trường hợp đóng lệnh 3: có phiên MACD xanh dương, MA cam sau điểm vào lệnh → đóng ngay
 
 ---
 
@@ -77,7 +75,6 @@ Chiến lược kết hợp **đường MA (Moving Average)** và **MACD custom*
 |-----------|-----------|-----------|
 | **TH1** (có chọn lọc) | Giá đóng cửa **dưới MA** VÀ giá đóng cửa < (giá giao nhau MA + độ lệch) | Đóng với giá = trung bình `low` và giá giao nhau MA gần nhất |
 | **TH2** (ngay lập tức) | MACD-Signal chuyển sang **đỏ hoặc cam** | Đóng ngay theo giá thị trường |
-| **TH3** (ngay lập tức) | MACD màu **đỏ** trong khi MA màu **xanh lá** | Đóng ngay — phân kỳ giảm: momentum ngắn hạn suy yếu trước MA |
 
 > **Lưu ý TH1:** Yêu cầu cả 2 điều kiện — giá dưới MA *và* chưa vượt quá ngưỡng độ lệch. Điều này tránh đóng lệnh quá sớm khi giá chỉ chạm MA rồi bật lại.
 
@@ -108,7 +105,6 @@ Chiến lược kết hợp **đường MA (Moving Average)** và **MACD custom*
 |-----------|-----------|-----------|
 | **TH1** (có chọn lọc) | Giá đóng cửa **trên MA** VÀ giá đóng cửa > (giá giao nhau MA + độ lệch) | Đóng với giá = trung bình `high` và giá giao nhau MA gần nhất |
 | **TH2** (ngay lập tức) | MACD-Signal chuyển sang **xanh lá hoặc xanh dương** | Đóng ngay theo giá thị trường |
-| **TH3** (ngay lập tức) | MACD màu **xanh dương** trong khi MA màu **cam** | Đóng ngay — phân kỳ tăng: momentum ngắn hạn phục hồi trước MA |
 
 > **Lưu ý TH1:** Yêu cầu cả 2 điều kiện — giá trên MA *và* đã vượt quá ngưỡng độ lệch. Tránh đóng lệnh quá sớm khi giá chỉ chạm MA rồi tiếp tục giảm.
 

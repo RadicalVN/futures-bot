@@ -1,6 +1,6 @@
 """
 db.py — Database Connection và Session Management
-Sử dụng SQLAlchemy async với SQLite (dễ migrate sang PostgreSQL trên VPS)
+Sử dụng SQLAlchemy async với PostgreSQL (asyncpg)
 """
 import os
 from contextlib import asynccontextmanager
@@ -10,16 +10,14 @@ from loguru import logger
 from .models import Base
 
 
-# Đọc DATABASE_URL từ env, mặc định là SQLite
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/trading.db")
-
-# Tạo thư mục data nếu chưa có
-os.makedirs("data", exist_ok=True)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://trading:trading@localhost:5432/trading_db")
 
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -33,8 +31,7 @@ async def init_db():
     """Tạo bảng và khởi tạo dữ liệu mặc định"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
-    logger.info(f"Database đã sẵn sàng: {DATABASE_URL}")
+    logger.info(f"Database đã sẵn sàng: {DATABASE_URL.split('@')[-1]}")
 
 
 @asynccontextmanager

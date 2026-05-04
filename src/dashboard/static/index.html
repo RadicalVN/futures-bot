@@ -47,6 +47,7 @@
     <div class="nav-item" onclick="showPage('strategies')">🎯 Chiến lược giao dịch</div>
     <div class="nav-item" onclick="showPage('settings')">⚙️ Cài đặt</div>
     <div class="nav-item" onclick="showPage('backtest')">🧪 Backtest</div>
+    <div class="nav-item" onclick="showPage('marketdata')">📦 Market Data</div>
   </aside>
 
   <!-- Main Content -->
@@ -409,8 +410,8 @@
                 <option value="sma_macd_cross_v3">V3 — V2 + MA Distance + Min Hold (bb=200)</option>
                 <option value="sma_macd_cross_v4">V4 — V1 + SL/TP % (bb=200)</option>
                 <option value="sma_macd_cross_v5">V5 — V4 + Bộ lọc hướng MA200</option>
-              </select>
-            </div>
+                <option value="adts">ADTS — Adaptive Dynamic Trend &amp; Shield</option>
+              </select>            </div>
             <div class="form-group">
               <label>Cặp tiền:</label>
               <input type="text" id="btSymbol" class="form-control" value="BTCUSDT" required placeholder="VD: BTCUSDT, TRUMPUSDT">
@@ -437,9 +438,21 @@
                 <option value="4h">4h</option><option value="1d">1d</option>
               </select>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="btSBbLengthGroup">
               <label>bb_length (MA period) <span style="color:var(--text-secondary); font-size:12px;">(để trống = mặc định)</span>:</label>
               <input type="number" id="btSBbLength" class="form-control" min="10" max="500" step="10" placeholder="Mặc định theo version">
+            </div>
+
+            <!-- Phí giao dịch — dùng chung cho mọi chiến lược -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="form-group" style="margin-bottom:8px;">
+                <label style="font-size:12px;">Hoa hồng % <span style="color:var(--text-secondary);">(mặc định 0.05%)</span></label>
+                <input type="number" id="btSCommission" class="form-control" min="0" max="1" step="0.01" placeholder="0.05">
+              </div>
+              <div class="form-group" style="margin-bottom:8px;">
+                <label style="font-size:12px;">Trượt giá % <span style="color:var(--text-secondary);">(mặc định 0%)</span></label>
+                <input type="number" id="btSSlippage" class="form-control" min="0" max="1" step="0.01" placeholder="0">
+              </div>
             </div>
 
             <!-- V2/V3 params -->
@@ -486,8 +499,53 @@
               </div>
             </div>
 
-            <button type="submit" class="btn btn-primary" style="width:100%" id="btSRunBtn">▶ Chạy Backtest</button>
-          </form>
+            <!-- ADTS params -->
+            <div id="btSAdtsParams" style="display:none;">
+              <div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px; padding:8px; background:rgba(65,131,244,0.08); border-radius:6px; border-left:3px solid var(--accent);">
+                🛡️ <strong>The Shield</strong>: ADX + BBWidth + EMA Slope<br>
+                📅 <strong>Daily Calibration</strong>: Base_ATR, Sideway_Threshold, Min_Slope tự động cập nhật mỗi ngày
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">ADX Threshold <span style="color:var(--text-secondary);">(mặc định 25)</span></label>
+                  <input type="number" id="btSAdxThreshold" class="form-control" min="10" max="60" step="0.5" placeholder="25">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">Emergency ADX <span style="color:var(--text-secondary);">(mặc định 20)</span></label>
+                  <input type="number" id="btSEmgAdx" class="form-control" min="5" max="40" step="0.5" placeholder="20">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">SL × ATR <span style="color:var(--text-secondary);">(mặc định 1.5)</span></label>
+                  <input type="number" id="btSSlAtr" class="form-control" min="0.5" max="5" step="0.1" placeholder="1.5">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">Hard SL % <span style="color:var(--text-secondary);">(mặc định 3%)</span></label>
+                  <input type="number" id="btSHardSlPct" class="form-control" min="0.5" max="20" step="0.5" placeholder="3">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">TP1 R:R <span style="color:var(--text-secondary);">(mặc định 1.2)</span></label>
+                  <input type="number" id="btSTp1Rr" class="form-control" min="0.5" max="5" step="0.1" placeholder="1.2">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">TP2 Trail × ATR <span style="color:var(--text-secondary);">(mặc định 2.0)</span></label>
+                  <input type="number" id="btSTp2Trail" class="form-control" min="0.5" max="5" step="0.1" placeholder="2.0">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">Risk % / lệnh <span style="color:var(--text-secondary);">(mặc định 1%)</span></label>
+                  <input type="number" id="btSRiskPct" class="form-control" min="0.1" max="10" step="0.1" placeholder="1">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">BBWidth SMA Period <span style="color:var(--text-secondary);">(mặc định 200)</span></label>
+                  <input type="number" id="btSBbwSma" class="form-control" min="20" max="500" step="10" placeholder="200">
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">Đòn bẩy <span style="color:var(--text-secondary);">(mặc định x5)</span></label>
+                  <input type="number" id="btSAdtsLeverage" class="form-control" min="1" max="125" step="1" placeholder="5">
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width:100%" id="btSRunBtn">▶ Chạy Backtest</button>          </form>
         </div>
 
         <!-- Kết quả -->
@@ -562,15 +620,65 @@
       </div>
 
       <!-- Loading indicator (dùng chung) -->
-      <div id="btLoading" style="display:none; text-align:center; padding:40px; color:var(--text-secondary);">
-        <div style="font-size:32px; margin-bottom:10px;">⏳</div>
-        <div>Đang chạy backtest, vui lòng chờ...</div>
-        <div style="font-size:12px; margin-top:8px;">Quá trình có thể mất vài phút tùy theo khoảng thời gian</div>
-        <div style="margin-top:20px; background:var(--border); border-radius:8px; height:12px; width:100%; max-width:500px; margin-left:auto; margin-right:auto; overflow:hidden;">
-          <div id="btProgressBar" style="height:100%; width:0%; background:var(--accent); border-radius:8px; transition:width 0.4s ease;"></div>
+      <div id="btLoading" style="display:none; margin-top:20px;">
+        <div class="card" style="padding:24px;">
+
+          <!-- Header -->
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+              <div id="btLoadingSpinner" style="font-size:24px; animation:spin 1.5s linear infinite; display:inline-block;">⚙️</div>
+              <div>
+                <div style="font-weight:600; font-size:15px; color:var(--text-primary);">Đang chạy Backtest</div>
+                <div id="btProgressText" style="font-size:12px; color:var(--text-secondary); margin-top:2px;">Đang khởi động...</div>
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div id="btProgressPct" style="font-size:22px; font-weight:bold; color:var(--accent);">0%</div>
+              <div id="btElapsedTime" style="font-size:11px; color:var(--text-secondary);">0s</div>
+            </div>
+          </div>
+
+          <!-- Progress bar -->
+          <div style="background:var(--border); border-radius:6px; height:10px; overflow:hidden; margin-bottom:16px;">
+            <div id="btProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #0ecb81); border-radius:6px; transition:width 0.4s ease;"></div>
+          </div>
+
+          <!-- Steps -->
+          <div id="btStepsList" style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+            <div class="bt-step" id="btStep1" data-step="1">
+              <span class="bt-step-icon">⬜</span>
+              <span class="bt-step-label" style="color:var(--text-secondary);">Kiểm tra dữ liệu cache</span>
+            </div>
+            <div class="bt-step" id="btStep2" data-step="2">
+              <span class="bt-step-icon">⬜</span>
+              <span class="bt-step-label" style="color:var(--text-secondary);">Đọc dữ liệu từ DB</span>
+            </div>
+            <div class="bt-step" id="btStep3" data-step="3">
+              <span class="bt-step-icon">⬜</span>
+              <span class="bt-step-label" style="color:var(--text-secondary);">Tính toán indicators</span>
+            </div>
+            <div class="bt-step" id="btStep4" data-step="4">
+              <span class="bt-step-icon">⬜</span>
+              <span class="bt-step-label" style="color:var(--text-secondary);">Simulate giao dịch</span>
+            </div>
+            <div class="bt-step" id="btStep5" data-step="5">
+              <span class="bt-step-icon">⬜</span>
+              <span class="bt-step-label" style="color:var(--text-secondary);">Tính thống kê & xuất Excel</span>
+            </div>
+          </div>
+
         </div>
-        <div id="btProgressText" style="margin-top:8px; font-size:13px; color:var(--accent);">0% — Đang khởi động...</div>
       </div>
+
+      <style>
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .bt-step { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:4px; transition:background 0.2s; }
+        .bt-step.active { background:rgba(65,131,244,0.1); }
+        .bt-step.done { opacity:0.7; }
+        .bt-step-icon { font-size:14px; width:18px; text-align:center; flex-shrink:0; }
+        .bt-step-label { flex:1; }
+        .bt-step-detail { color:var(--accent); font-size:11px; }
+      </style>
 
       <!-- Equity Curve Chart (dùng chung) -->
       <div class="card" id="btEquityCard" style="display:none; margin-top:20px;">
@@ -579,6 +687,38 @@
           <canvas id="btEquityChart"></canvas>
         </div>
       </div>
+
+      <!-- Backtest Chart: Candlestick + Indicators + Entry/Exit -->
+      <div class="card" id="btChartContainer" style="display:none; margin-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3>📊 Biểu đồ Chiến lược</h3>
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <span style="font-size:11px; color:var(--text-secondary);">
+              <span style="color:#0ecb81;">▲</span> Long &nbsp;
+              <span style="color:#f6465d;">▼</span> Short &nbsp;
+              <span style="color:#0ecb81;">✕</span> Exit Win &nbsp;
+              <span style="color:#f6465d;">✕</span> Exit Loss
+            </span>
+            <!-- Legend dropdown -->
+            <div style="position:relative;" class="chart-legend-dropdown">
+              <button class="btn" style="padding:4px 10px; font-size:12px;" onclick="btToggleLegendMenu()">📋 Chỉ báo ▾</button>
+              <div id="btChartLegend" style="display:none; position:absolute; right:0; top:100%; margin-top:4px; background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; padding:8px; min-width:180px; z-index:100; flex-direction:column; box-shadow:0 4px 16px rgba(0,0,0,0.4);"></div>
+            </div>
+            <button class="btn" style="padding:4px 10px; font-size:12px;" onclick="btResetZoom()">🔍 Reset Zoom</button>
+          </div>
+        </div>
+        <div style="height:600px; position:relative;">
+          <canvas id="btPriceChart"></canvas>
+        </div>
+        <div style="font-size:11px; color:var(--text-secondary); margin-top:6px; padding:0 4px;">
+          💡 Scroll để zoom · Kéo để pan · Click vào ▲▼✕ để xem chi tiết · Click row trong bảng để nhảy đến lệnh
+        </div>
+      </div>
+
+      <style>
+        #btTradesBody tr.bt-highlight { background: rgba(65,131,244,0.15) !important; }
+        #btTradesBody tr[data-trade-idx]:hover { background: rgba(255,255,255,0.04); cursor:pointer; }
+      </style>
 
       <!-- Trade list (dùng chung) -->
       <div class="card" id="btTradesCard" style="display:none; margin-top:20px;">
@@ -604,6 +744,99 @@
             </thead>
             <tbody id="btTradesBody"></tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: MARKET DATA -->
+    <div id="page-marketdata" class="page">
+      <h2>📦 Market Data Cache</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">
+        Quản lý dữ liệu OHLCV được cache từ sàn. Mỗi chiến lược có tập data riêng.
+      </p>
+
+      <!-- Actions -->
+      <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="mdRefreshStatus()" style="padding:8px 18px;">🔄 Làm mới trạng thái</button>
+        <button class="btn" onclick="mdRefreshAll(false)" style="padding:8px 18px; background:#1a6b3a; color:#fff; border:none; border-radius:6px; cursor:pointer;">⬆️ Cập nhật tất cả (Incremental)</button>
+        <button class="btn" onclick="mdRefreshAll(true)" style="padding:8px 18px; background:#7a1a1a; color:#fff; border:none; border-radius:6px; cursor:pointer;">🔁 Kéo lại tất cả (Full Refresh)</button>
+      </div>
+
+      <!-- Global job progress -->
+      <div id="mdGlobalProgress" style="display:none; margin-bottom:20px;">
+        <div style="background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; padding:16px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <span id="mdGlobalMsg" style="color:var(--text-primary); font-size:14px;">Đang xử lý...</span>
+            <span id="mdGlobalPct" style="color:var(--accent); font-weight:bold;">0%</span>
+          </div>
+          <div style="background:var(--border); border-radius:4px; height:8px; overflow:hidden;">
+            <div id="mdGlobalBar" style="height:100%; background:var(--accent); width:0%; transition:width 0.3s;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status table -->
+      <div class="card">
+        <h3 style="margin-bottom:15px;">📊 Trạng thái Data theo Dataset</h3>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Chiến lược</th>
+                <th>Symbol</th>
+                <th>Timeframe</th>
+                <th>Số nến</th>
+                <th>Từ ngày</th>
+                <th>Đến ngày</th>
+                <th>Lag (giờ)</th>
+                <th>Trạng thái</th>
+                <th>Hành động</th>
+              </tr>
+            </thead>
+            <tbody id="mdStatusBody">
+              <tr><td colspan="9" style="text-align:center; color:var(--text-secondary); padding:30px;">Đang tải...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Jobs history -->
+      <div class="card" style="margin-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+          <h3>📋 Lịch sử Fetch Jobs</h3>
+          <button class="btn" onclick="mdLoadJobs()" style="padding:6px 14px; font-size:13px;">🔄 Làm mới</button>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Chiến lược</th><th>Symbol</th><th>TF</th>
+                <th>Loại</th><th>Trạng thái</th><th>Tiến độ</th>
+                <th>Nến đã lưu</th><th>Thời gian</th><th>Hành động</th>
+              </tr>
+            </thead>
+            <tbody id="mdJobsBody">
+              <tr><td colspan="10" style="text-align:center; color:var(--text-secondary); padding:20px;">Chưa có job nào</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Job detail modal (inline) -->
+      <div id="mdJobDetail" style="display:none; margin-top:20px;">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3 id="mdJobDetailTitle">Chi tiết Job</h3>
+            <button onclick="document.getElementById('mdJobDetail').style.display='none'" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:18px;">✕</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr><th>Chunk</th><th>Từ ngày</th><th>Đến ngày</th><th>Trạng thái</th><th>Nến</th><th>Retry</th><th>Lỗi</th></tr>
+              </thead>
+              <tbody id="mdChunksBody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

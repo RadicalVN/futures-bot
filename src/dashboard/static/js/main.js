@@ -1,11 +1,13 @@
 import { loadDashboard } from './dashboard.js';
 import { fetchBots, createBot, toggleBot, deleteBot, updateBotSetting } from './bots.js';
 import { loadSettings, createAccount } from './accounts.js';
-import { loadChart, populateSymbolsDatalist, globalReset, globalRefresh, onLeftTimeframeChange, onRightTimeframeChange, onSymbolChange, toggleLegendMenu, toggleDataset, scrollToLatest } from './chart.js';
+import { loadChart, populateSymbolsDatalist, globalReset, globalRefresh, onLeftTimeframeChange, onRightTimeframeChange, onSymbolChange, toggleLegendMenu, toggleDataset, resetHiddenStates, scrollToLatest, stopAutoRefresh } from './chart.js';
 import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignals, openStrategyDetail } from './strategies.js';
 import { renderIndicatorsManagement, toggleIndicator } from './indicators.js';
 import { loadTradesPage, applyTradeFilters, resetTradeFilters } from './trades.js';
 import { loadBacktestPage, runBacktest, filterBtTrades, switchBtTab, onStrategyChange, runStrategyBacktest } from './backtest.js';
+import { loadMarketDataPage, mdRefreshStatus, mdRefreshAll, mdRefreshOne, mdLoadJobs, mdShowJobDetail, mdRetryJob } from './market_data.js';
+import { scrollChartToTrade as _scrollChartToTrade } from './backtest_chart.js';
 
 // Expose handlers to window for HTML onclick attributes
 window.createBot = createBot;
@@ -21,6 +23,7 @@ window.onRightTimeframeChange = onRightTimeframeChange;
 window.onSymbolChange = onSymbolChange;
 window.toggleLegendMenu = toggleLegendMenu;
 window.toggleDataset = toggleDataset;
+window.resetHiddenStates = resetHiddenStates;
 window.scrollToLatest = scrollToLatest;
 
 window.addSignal = addSignal;
@@ -39,8 +42,30 @@ window.switchBtTab = switchBtTab;
 window.onStrategyChange = onStrategyChange;
 window.runStrategyBacktest = runStrategyBacktest;
 
+// Market Data
+window.mdRefreshStatus = mdRefreshStatus;
+window.mdRefreshAll    = mdRefreshAll;
+window.mdRefreshOne    = mdRefreshOne;
+window.mdLoadJobs      = mdLoadJobs;
+window.mdShowJobDetail = mdShowJobDetail;
+window.mdRetryJob      = mdRetryJob;
+
+// Backtest chart helpers
+window.btResetZoom = function() {
+  const canvas = document.getElementById('btPriceChart');
+  if (!canvas) return;
+  const chart = Chart.getChart(canvas);
+  if (chart && chart.resetZoom) chart.resetZoom();
+};
+
 // Global Navigation
 window.showPage = function showPage(pageId) {
+  // Dừng auto-refresh chart khi rời Dashboard
+  const prevPage = localStorage.getItem('activePage');
+  if (prevPage === 'dashboard' && pageId !== 'dashboard') {
+    stopAutoRefresh();
+  }
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + pageId).classList.add('active');
@@ -59,20 +84,26 @@ window.showPage = function showPage(pageId) {
   // Lưu tab hiện tại để restore khi reload
   localStorage.setItem('activePage', pageId);
 
-  if(pageId === 'dashboard') loadDashboard();
+  if(pageId === 'dashboard') {
+    loadDashboard();
+    // Lazy load chart — chỉ khi vào Dashboard
+    loadChart(1);
+    loadChart(2);
+  }
   if(pageId === 'mybots') fetchBots();
   if(pageId === 'trades') loadTradesPage();
   if(pageId === 'settings') loadSettings();
   if(pageId === 'strategies') renderSignalsManagement();
   if(pageId === 'indicators') renderIndicatorsManagement();
   if(pageId === 'backtest') loadBacktestPage();
+  if(pageId === 'marketdata') loadMarketDataPage();
 }
 
 // Init Application
 window.onload = () => {
   populateSymbolsDatalist();
-  loadChart(1);
-  loadChart(2);
+  // KHÔNG gọi loadChart ở đây — chỉ load khi user vào tab Dashboard
+  // để tránh fetch API không cần thiết khi đang ở tab khác
 
   // Restore tab đang active trước khi reload, mặc định là dashboard
   const savedPage = localStorage.getItem('activePage') || 'dashboard';

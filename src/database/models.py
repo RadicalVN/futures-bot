@@ -3,7 +3,10 @@ models.py — SQLAlchemy ORM Models
 Cấu trúc Database chuyên nghiệp cho Nền tảng Bot Trading
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, JSON, ForeignKey, Text
+from sqlalchemy import (
+    Column, Integer, String, Float, DateTime, Boolean, JSON,
+    ForeignKey, Text, BigInteger, UniqueConstraint, Index,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 import enum
@@ -293,3 +296,168 @@ class Signal(Base):
             "executed": self.executed,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
         }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OHLCV Market Data Cache
+# ══════════════════════════════════════════════════════════════════════════════
+
+class OHLCVCandle(Base):
+    """
+    Cache dữ liệu nến OHLCV theo từng chiến lược.
+    Mỗi chiến lược có tập data riêng (strategy_name + symbol + timeframe).
+    Primary key composite để đảm bảo không duplicate.
+    """
+    __tablename__ = "ohlcv_candles"
+
+    # Composite PK: (strategy_name, symbol, timeframe, timestamp_ms)
+    strategy_name = Column(String(50),  nullable=False, primary_key=True)
+    symbol        = Column(String(20),  nullable=False, primary_key=True)
+    timeframe     = Column(String(10),  nullable=False, primary_key=True)
+    timestamp_ms  = Column(BigInteger,  nullable=False, primary_key=True)
+
+    open   = Column(Float, nullable=False)
+    high   = Column(Float, nullable=False)
+    low    = Column(Float, nullable=False)
+    close  = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+
+    __table_args__ = (
+        # Index để query range nhanh
+        Index(
+            "ix_ohlcv_strategy_symbol_tf_ts",
+            "strategy_name", "symbol", "timeframe", "timestamp_ms",
+        ),
+    )
+
+    def to_list(self):
+        """Trả về dạng [ts_ms, open, high, low, close, volume] — tương thích với ccxt"""
+        return [self.timestamp_ms, self.open, self.high, self.low, self.close, self.volume]
+
+
+class OHLCVFetchJob(Base):
+    """
+    Theo dõi tiến trình fetch data theo từng chunk thời gian.
+    Mỗi job được chia thành nhiều chunk (mỗi chunk ~30 ngày).
+    Nếu fail ở chunk nào → đánh dấu để retry, không cần kéo lại từ đầu.
+    """
+    __tablename__ = "ohlcv_fetch_jobs"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    job_key       = Column(String(200), nullable=False, index=True)
+    # job_key = "{strategy_name}:{symbol}:{timeframe}:{job_type}"
+    # job_type: "full_refresh" | "incremental"
+
+    strategy_name = Column(String(50),  nullable=False)
+    symbol        = Column(String(20),  nullable=False)
+    timeframe     = Column(String(10),  nullable=False)
+    job_type      = Column(String(20),  nullable=False)  # full_refresh | incremental
+
+    # Trạng thái tổng thể
+    status        = Column(String(20),  default="pending")
+    # pending | running | done | partial_done | failed
+
+    # Tổng số chunk và tiến độ
+    total_chunks  = Column(Integer, default=0)
+    done_chunks   = Column(Integer, default=0)
+    failed_chunks = Column(Integer, default=0)
+
+    # Thống kê
+    total_candles_inserted = Column(Integer, default=0)
+    error_message          = Column(Text,    nullable=True)
+
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+    # Quan hệ với các chunk
+    chunks = relationship(
+        "OHLCVFetchChunk", back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="OHLCVFetchChunk.chunk_index",
+    )
+
+    def to_dict(self):
+        progress = (
+            round(self.done_chunks / self.total_chunks * 100, 1)
+            if self.total_chunks > 0 else 0
+        )
+        return {
+            "id":             self.id,
+            "job_key":        self.job_key,
+            "strategy_name":  self.strategy_name,
+            "symbol":         self.symbol,
+            "timeframe":      self.timeframe,
+            "job_type":       self.job_type,
+            "status":         self.status,
+            "total_chunks":   self.total_chunks,
+            "done_chunks":    self.done_chunks,
+            "failed_chunks":  self.failed_chunks,
+            "progress_pct":   progress,
+            "total_candles_inserted": self.total_candles_inserted,
+            "error_message":  self.error_message,
+            "created_at":     self.created_at.isoformat() if self.created_at else None,
+            "updated_at":     self.updated_at.isoformat() if self.updated_at else None,
+            "finished_at":    self.finished_at.isoformat() if self.finished_at else None,
+        }
+
+
+class OHLCVFetchChunk(Base):
+    """
+    Một chunk thời gian trong job fetch.
+    Mỗi chunk = 30 ngày dữ liệu.
+    Trạng thái độc lập → fail 1 chunk không ảnh hưởng chunk khác.
+    """
+    __tablename__ = "ohlcv_fetch_chunks"
+
+    id          = Column(Integer,    primary_key=True, autoincrement=True)
+    job_id      = Column(Integer,    ForeignKey("ohlcv_fetch_jobs.id", ondelete="CASCADE"), nullable=False)
+    job         = relationship("OHLCVFetchJob", back_populates="chunks")
+
+    chunk_index = Column(Integer,    nullable=False)   # 0-based index trong job
+    start_ms    = Column(BigInteger, nullable=False)   # Timestamp bắt đầu chunk (ms)
+    end_ms      = Column(BigInteger, nullable=False)   # Timestamp kết thúc chunk (ms)
+
+    status      = Column(String(20), default="pending")
+    # pending | running | done | failed | retrying
+
+    candles_inserted = Column(Integer, default=0)
+    retry_count      = Column(Integer, default=0)
+    error_message    = Column(Text,    nullable=True)
+
+    started_at  = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_ohlcv_chunk_job_idx", "job_id", "chunk_index"),
+        UniqueConstraint("job_id", "chunk_index", name="uq_ohlcv_chunk_job_idx"),
+    )
+
+    def to_dict(self):
+        return {
+            "id":               self.id,
+            "job_id":           self.job_id,
+            "chunk_index":      self.chunk_index,
+            "start_ms":         self.start_ms,
+            "end_ms":           self.end_ms,
+            "status":           self.status,
+            "candles_inserted": self.candles_inserted,
+            "retry_count":      self.retry_count,
+            "error_message":    self.error_message,
+        }
+
+
+class SystemSetting(Base):
+    """
+    Key-value store cho cài đặt hệ thống.
+    Dùng để lưu trạng thái scheduler (last_ohlcv_update_date, ...).
+    """
+    __tablename__ = "system_settings"
+
+    key        = Column(String(100), primary_key=True)
+    value      = Column(Text,        nullable=True)
+    updated_at = Column(DateTime,    default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @classmethod
+    def make(cls, key: str, value: str) -> "SystemSetting":
+        return cls(key=key, value=value)

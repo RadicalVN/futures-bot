@@ -133,9 +133,6 @@ class SmaMacdCrossV2Strategy(BaseStrategy):
             if sig_color in SIG_BEARISH:
                 exit_reason = f"Đóng LONG TH2: Signal {sig_color}"
                 exit_price = close_curr
-            elif macd_color == "red" and ma_color == "green":
-                exit_reason = "Đóng LONG TH3: MACD đỏ + MA xanh lá"
-                exit_price = close_curr
             elif close_curr < ma_curr:
                 threshold = pos_ma_cross_price + pos_entry_deviation
                 if close_curr < threshold:
@@ -149,9 +146,6 @@ class SmaMacdCrossV2Strategy(BaseStrategy):
             exit_reason = None
             if sig_color in SIG_BULLISH:
                 exit_reason = f"Đóng SHORT TH2: Signal {sig_color}"
-                exit_price = close_curr
-            elif macd_color == "blue" and ma_color == "orange":
-                exit_reason = "Đóng SHORT TH3: MACD xanh + MA cam"
                 exit_price = close_curr
             elif close_curr > ma_curr:
                 threshold = pos_ma_cross_price + pos_entry_deviation

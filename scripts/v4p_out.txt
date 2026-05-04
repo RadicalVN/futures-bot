@@ -1,0 +1,1 @@
+Bot#11 updated: leverage_v4=10 notional=$2000.0 SL=3.0% TP=3.0%

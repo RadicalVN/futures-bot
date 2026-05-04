@@ -83,6 +83,20 @@ def _check_exit_condition(
         if signal_type == "short" and trend == 1:
             return True, f"📈 Trend đảo Tăng"
 
+    elif strategy_name == "adts":
+        # ADTS tự quản lý SL/TP/Trailing/Emergency trong strategy.py
+        # ExitMonitor chỉ xử lý SL/TP cứng từ DB (đã được check ở đầu hàm)
+        # Kiểm tra thêm Emergency Exit nếu có calibration data trong metadata
+        sideway_threshold = ohlcv_meta.get("sideway_threshold", 0.0)
+        adx_val = ohlcv_meta.get("adx", 999.0)
+        bb_width = ohlcv_meta.get("bb_width", 999.0)
+        emergency_adx_thr = ohlcv_meta.get("emergency_adx_threshold", 20.0)
+
+        if sideway_threshold > 0 and adx_val < emergency_adx_thr:
+            return True, f"🚨 ADTS Emergency: ADX={adx_val:.1f} < {emergency_adx_thr}"
+        if sideway_threshold > 0 and bb_width < sideway_threshold:
+            return True, f"🚨 ADTS Emergency: BBWidth={bb_width:.5f} < Threshold={sideway_threshold:.5f}"
+
     elif strategy_name == "sma_macd_cross":
         ma_color   = ohlcv_meta.get("ma_color", "")
         sig_color  = ohlcv_meta.get("sig_color", "")
@@ -104,10 +118,6 @@ def _check_exit_condition(
             if sig_color in SIG_BEARISH:
                 return True, f"📉 TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
 
-            # TH3 (ưu tiên): MACD đỏ + MA xanh lá → phân kỳ giảm → đóng ngay
-            if macd_color == "red" and ma_color == "green":
-                return True, f"📉 TH3: MACD đỏ + MA xanh lá (phân kỳ giảm) → đóng ngay"
-
             # TH1 (có chọn lọc): close < MA VÀ close < (ma_cross_price + deviation)
             if ma_val and close_val < ma_val:
                 threshold = ma_cross_price + entry_deviation
@@ -122,10 +132,6 @@ def _check_exit_condition(
             # TH2 (ưu tiên): MACD-Signal chuyển xanh lá/xanh dương → đóng ngay
             if sig_color in SIG_BULLISH:
                 return True, f"📈 TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
-
-            # TH3 (ưu tiên): MACD xanh dương + MA cam → phân kỳ tăng → đóng ngay
-            if macd_color == "blue" and ma_color == "orange":
-                return True, f"📈 TH3: MACD xanh dương + MA cam (phân kỳ tăng) → đóng ngay"
 
             # TH1 (có chọn lọc): close > MA VÀ close > (ma_cross_price + deviation)
             if ma_val and close_val > ma_val:

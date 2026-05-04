@@ -1,0 +1,1 @@
+CREATED id=9 bb_length=150 trend_filter=True

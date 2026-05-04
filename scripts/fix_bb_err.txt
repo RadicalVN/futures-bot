@@ -1,0 +1,1 @@
+2026-05-01 21:24:58.528 | INFO     | src.database.db:init_db:37 - Database \u0111ã s\u1eb5n sàng: sqlite+aiosqlite:///./data/trading.db

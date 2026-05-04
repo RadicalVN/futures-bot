@@ -1,0 +1,4 @@
+Bot#7 TVT-SMA+MACD / BTCUSDT (sma_macd_cross): bb_length 50 -> 200
+Bot#8 TVT-SMA+MACD / TRUMPUSDT (sma_macd_cross): bb_length 50 -> 200
+Bot#11 TVT-SMA+MACD-V4 / BTCUSDT (sma_macd_cross_v4): bb_length 50 -> 200
+Done.

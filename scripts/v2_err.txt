@@ -1,0 +1,21 @@
+2026-05-01 16:57:29.065 | INFO     | src.database.db:init_db:37 - Database \u0111ã s\u1eb5n sàng: sqlite+aiosqlite:///./data/trading.db
+Traceback (most recent call last):
+  File "E:\tuantv1008\sources\trading-service\scripts\create_v2_bot.py", line 45, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\MY PC\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\MY PC\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\MY PC\AppData\Local\Programs\Python\Python314\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "E:\tuantv1008\sources\trading-service\scripts\create_v2_bot.py", line 40, in main
+    print(f"\u0110ã t\u1ea1o Bot V2: ID={bot_id}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\MY PC\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u0110' in position 0: character maps to <undefined>

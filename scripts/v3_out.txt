@@ -1,0 +1,5 @@
+CREATED id=10
+bb_length=200
+use_trend_filter=True
+min_ma_distance_pct=0.1
+min_hold_candles=3

@@ -1,0 +1,30 @@
+Bot: TVT-SMA+MACD-V2 / BTCUSDT | strategy=sma_macd_cross_v2
+Params: bb_length=150 use_trend_filter=True
+
+=== KET QUA V2 ===
+Tong lenh:    13
+Thang/Thua:   3/10
+Win rate:     23.08%
+Tong PnL:     -29.0361 USDT
+Return:       -0.62%
+Max DD:       1.03%
+Profit Factor:0.66
+Sharpe:       -49.511
+TB thang:     18.7826 USDT
+TB thua:      -8.5384 USDT
+TB hold:      8.7 nen
+
+=== CHI TIET LENH ===
+  + 2026-04-20 13:35->2026-04-20 14:35 LONG entry=74466.29 exit=74892.40 pnl=23.6107(+2.36%) hold=12n
+  + 2026-04-21 14:55->2026-04-21 16:00 LONG entry=75944.08 exit=76378.30 pnl=23.6377(+2.36%) hold=13n
+  - 2026-04-22 06:05->2026-04-22 06:10 LONG entry=75798.27 exit=75747.32 pnl=-8.3957(-0.84%) hold=1n
+  + 2026-04-24 18:10->2026-04-24 18:55 LONG entry=77990.02 exit=78209.50 pnl=9.0995(+0.91%) hold=9n
+  - 2026-04-25 09:50->2026-04-25 10:05 LONG entry=77579.08 exit=77563.09 pnl=-6.0530(-0.60%) hold=3n
+  - 2026-04-25 15:20->2026-04-25 15:45 LONG entry=77511.79 exit=77500.07 pnl=-5.7723(-0.58%) hold=5n
+  - 2026-04-26 05:05->2026-04-26 05:10 LONG entry=77493.37 exit=77477.29 pnl=-6.0502(-0.60%) hold=1n
+  - 2026-04-27 21:40->2026-04-27 21:50 LONG entry=78114.05 exit=77950.66 pnl=-15.4775(-1.55%) hold=2n
+  - 2026-04-28 06:35->2026-04-28 08:50 LONG entry=77158.31 exit=77073.80 pnl=-10.4707(-1.05%) hold=27n
+  - 2026-04-28 12:05->2026-04-28 12:10 LONG entry=76956.45 exit=76899.01 pnl=-8.7163(-0.87%) hold=1n
+  - 2026-04-29 02:50->2026-04-29 05:55 LONG entry=76286.84 exit=76206.20 pnl=-10.2546(-1.03%) hold=37n
+  - 2026-04-30 07:50->2026-04-30 07:55 LONG entry=76271.02 exit=76239.08 pnl=-7.0633(-0.71%) hold=1n
+  - 2026-04-30 13:35->2026-04-30 13:40 LONG entry=75773.45 exit=75740.60 pnl=-7.1304(-0.72%) hold=1n

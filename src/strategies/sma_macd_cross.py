@@ -14,7 +14,6 @@ Implement theo "Phần 2 — Mô tả theo ngôn ngữ trader" trong docs/sma_ma
   TH1 (có chọn lọc): close < MA VÀ close < (ma_cross_price + entry_deviation)
       → Đóng với giá = (low_curr + ma_curr) / 2
   TH2 (ngay lập tức): MACD-Signal chuyển đỏ hoặc cam
-  TH3 (ngay lập tức): MACD màu đỏ VÀ MA màu xanh lá
 
 ─── ENTRY SHORT ──────────────────────────────────────────────────────────────
   Điều kiện 1: MACD-Signal đang màu cam HOẶC đỏ
@@ -27,7 +26,7 @@ Implement theo "Phần 2 — Mô tả theo ngôn ngữ trader" trong docs/sma_ma
   TH1 (có chọn lọc): close > MA VÀ close > (ma_cross_price + entry_deviation)
       → Đóng với giá = (high_curr + ma_curr) / 2
   TH2 (ngay lập tức): MACD-Signal chuyển xanh lá hoặc xanh dương
-  TH3 (ngay lập tức): MACD màu xanh dương VÀ MA màu cam
+  
 """
 import pandas as pd
 import numpy as np
@@ -214,11 +213,6 @@ class SmaMacdCrossStrategy(BaseStrategy):
                 exit_reason = f"Đóng LONG TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
                 exit_price = close_curr
 
-            # TH3 (ưu tiên cao): MACD đỏ + MA xanh lá → phân kỳ giảm → đóng ngay
-            elif macd_color == "red" and ma_color == "green":
-                exit_reason = f"Đóng LONG TH3: MACD đỏ + MA xanh lá (phân kỳ giảm) → đóng ngay"
-                exit_price = close_curr
-
             # TH1 (có chọn lọc): close < MA VÀ close < (ma_cross_price + deviation)
             elif close_curr < ma_curr:
                 threshold = pos_ma_cross_price + pos_entry_deviation
@@ -241,11 +235,6 @@ class SmaMacdCrossStrategy(BaseStrategy):
             # TH2 (ưu tiên cao): MACD-Signal chuyển xanh lá hoặc xanh dương → đóng ngay
             if sig_color in SIG_BULLISH:
                 exit_reason = f"Đóng SHORT TH2: MACD-Signal chuyển {sig_color} → đóng ngay"
-                exit_price = close_curr
-
-            # TH3 (ưu tiên cao): MACD xanh dương + MA cam → phân kỳ tăng → đóng ngay
-            elif macd_color == "blue" and ma_color == "orange":
-                exit_reason = f"Đóng SHORT TH3: MACD xanh dương + MA cam (phân kỳ tăng) → đóng ngay"
                 exit_price = close_curr
 
             # TH1 (có chọn lọc): close > MA VÀ close > (ma_cross_price + deviation)

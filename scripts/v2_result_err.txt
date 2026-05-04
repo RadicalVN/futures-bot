@@ -1,0 +1,6 @@
+2026-05-01 17:04:34.851 | INFO     | src.database.db:init_db:37 - Database \u0111ã s\u1eb5n sàng: sqlite+aiosqlite:///./data/trading.db
+2026-05-01 17:04:36.728 | INFO     | src.core.exchange:connect:65 - \U0001f9ea K\u1ebft n\u1ed1i Binance DEMO TRADING Futures (demo-fapi.binance.com)
+2026-05-01 17:04:37.896 | INFO     | src.core.exchange:connect:85 - \u2705 \u0110ã k\u1ebft n\u1ed1i thành công — Market: FUTURES
+2026-05-01 17:04:37.897 | INFO     | src.dashboard.routers.backtest:_run_backtest_engine:346 - Backtest [None]: fetch BTC/USDT 5m 1776643200000\u21921777593599000
+2026-05-01 17:04:40.621 | INFO     | src.dashboard.routers.backtest:_run_backtest_engine:357 - Backtest [None]: 5000 candles fetched
+2026-05-01 17:04:50.341 | INFO     | src.core.exchange:close:91 - \u0110ã \u0111óng k\u1ebft n\u1ed1i exchange

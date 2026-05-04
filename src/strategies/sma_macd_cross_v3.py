@@ -103,9 +103,6 @@ class SmaMacdCrossV3Strategy(BaseStrategy):
             if sig_color in SIG_BEARISH:
                 exit_reason = f"Close LONG TH2: Signal {sig_color}"
                 exit_price = close_curr
-            elif macd_color == "red" and ma_color == "green":
-                exit_reason = "Close LONG TH3: MACD red + MA green"
-                exit_price = close_curr
             elif close_curr < ma_curr:
                 if candles_held >= self.min_hold_candles:
                     threshold = pos_ma_cross_price + pos_entry_deviation
@@ -122,9 +119,6 @@ class SmaMacdCrossV3Strategy(BaseStrategy):
             exit_reason = None
             if sig_color in SIG_BULLISH:
                 exit_reason = f"Close SHORT TH2: Signal {sig_color}"
-                exit_price = close_curr
-            elif macd_color == "blue" and ma_color == "orange":
-                exit_reason = "Close SHORT TH3: MACD blue + MA orange"
                 exit_price = close_curr
             elif close_curr > ma_curr:
                 if candles_held >= self.min_hold_candles:

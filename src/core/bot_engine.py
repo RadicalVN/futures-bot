@@ -21,6 +21,7 @@ from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
 from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
 from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
 from src.strategies.sma_macd_cross_v5 import SmaMacdCrossV5Strategy
+from src.strategies.adts import ADTSStrategy
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount
 
@@ -259,6 +260,15 @@ class BotEngine:
                 int(self.parameters.get("macd_signal_length", 500)) + 50,
             )
             self.strategy = SmaMacdCrossV5Strategy(self.parameters)
+        elif self.strategy_name == "adts":
+            # ADTS cần đủ dữ liệu cho BBWidth SMA(200) + ATR(14) + ADX(14)
+            # Thêm buffer để resample D1 có đủ ngày
+            adts_lookback = max(
+                self.lookback,
+                int(self.parameters.get("bbwidth_sma_period", 200)) * 10 + 100,
+            )
+            self.lookback = adts_lookback
+            self.strategy = ADTSStrategy(self.parameters)
         else:
             raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")
 

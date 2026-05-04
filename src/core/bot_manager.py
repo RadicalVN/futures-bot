@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from loguru import logger
 from sqlalchemy import select
 from src.database.db import get_db
@@ -7,6 +7,11 @@ from src.database.models import Bot
 
 # Global reference để dashboard có thể lấy positions
 _global_bot_manager = None
+
+UTC7 = timezone(timedelta(hours=7))
+DAILY_JOB_HOUR_UTC7   = 0   # 00:30 UTC+7
+DAILY_JOB_MINUTE_UTC7 = 30
+STARTUP_DELAY_MINUTES = 30  # Nếu server restart và job chưa chạy → chờ 30 phút
 
 
 async def _get_global_positions() -> list:
@@ -41,16 +46,141 @@ class BotManager:
         _global_bot_manager = self
         logger.info("BotManager started. Đang theo dõi danh sách bot trong DB...")
         self.is_running = True
-        # Chạy song song: poll bots + gửi report gộp
+        # Chạy song song: poll bots + gửi report gộp + daily data update
         await asyncio.gather(
             self._poll_loop(),
             self._report_coordinator_loop(),
+            self._daily_data_update_loop(),
         )
 
     async def _poll_loop(self):
         while self.is_running:
             await self._poll_bots()
             await asyncio.sleep(5)
+
+    # ── Daily OHLCV Data Update ───────────────────────────────────────────────
+
+    async def _daily_data_update_loop(self):
+        """
+        Scheduler cho job cập nhật data OHLCV hàng ngày.
+
+        Logic:
+        1. Khi khởi động: kiểm tra xem hôm nay đã chạy job chưa
+           - Chưa chạy → schedule sau STARTUP_DELAY_MINUTES phút
+           - Đã chạy   → schedule lúc 00:30 UTC+7 ngày mai
+        2. Sau khi chạy xong → schedule lại cho ngày hôm sau
+        """
+        # Chờ 10s để DB và exchange sẵn sàng
+        await asyncio.sleep(10)
+
+        while self.is_running:
+            try:
+                wait_seconds = await self._calc_next_run_wait()
+                logger.info(
+                    f"[DailyDataJob] Lần chạy tiếp theo sau {wait_seconds:.0f}s "
+                    f"({wait_seconds/60:.1f} phút)"
+                )
+
+                # Chờ đến giờ chạy (check mỗi 30s để có thể dừng sớm)
+                waited = 0
+                while waited < wait_seconds and self.is_running:
+                    sleep_step = min(30, wait_seconds - waited)
+                    await asyncio.sleep(sleep_step)
+                    waited += sleep_step
+
+                if not self.is_running:
+                    break
+
+                await self._run_daily_data_update()
+
+            except Exception as e:
+                logger.error(f"[DailyDataJob] Lỗi trong scheduler loop: {e}")
+                await asyncio.sleep(60)
+
+    async def _calc_next_run_wait(self) -> float:
+        """
+        Tính số giây cần chờ đến lần chạy tiếp theo.
+
+        - Nếu hôm nay chưa chạy → chờ STARTUP_DELAY_MINUTES phút
+        - Nếu đã chạy hôm nay   → chờ đến 00:30 UTC+7 ngày mai
+        """
+        from src.data.ohlcv_service import get_setting
+
+        now_utc7 = datetime.now(UTC7)
+        today_str = now_utc7.strftime("%Y-%m-%d")
+
+        last_run = await get_setting("last_ohlcv_update_date")
+
+        if last_run != today_str:
+            # Chưa chạy hôm nay → chạy sau STARTUP_DELAY_MINUTES phút
+            logger.info(
+                f"[DailyDataJob] Hôm nay ({today_str}) chưa chạy "
+                f"(last_run={last_run}) → schedule sau {STARTUP_DELAY_MINUTES} phút"
+            )
+            return STARTUP_DELAY_MINUTES * 60.0
+
+        # Đã chạy hôm nay → chờ đến 00:30 UTC+7 ngày mai
+        tomorrow_utc7 = (now_utc7 + timedelta(days=1)).replace(
+            hour=DAILY_JOB_HOUR_UTC7,
+            minute=DAILY_JOB_MINUTE_UTC7,
+            second=0,
+            microsecond=0,
+        )
+        wait_seconds = (tomorrow_utc7 - now_utc7).total_seconds()
+        return max(wait_seconds, 60.0)
+
+    async def _run_daily_data_update(self):
+        """
+        Chạy incremental update cho tất cả active datasets.
+        Lưu ngày chạy vào system_settings để tránh chạy lại khi restart.
+        """
+        from src.data.ohlcv_service import get_active_datasets, incremental_update, set_setting
+        from src.core.exchange import create_exchange_from_env
+
+        now_utc7  = datetime.now(UTC7)
+        today_str = now_utc7.strftime("%Y-%m-%d")
+        logger.info(f"[DailyDataJob] Bắt đầu cập nhật data OHLCV — {today_str}")
+
+        datasets = await get_active_datasets()
+        if not datasets:
+            logger.info("[DailyDataJob] Không có dataset nào cần cập nhật")
+            await set_setting("last_ohlcv_update_date", today_str)
+            return
+
+        # Tạo exchange (dùng env credentials, không cần account cụ thể)
+        try:
+            exchange = create_exchange_from_env()
+            await exchange.connect()
+        except Exception as e:
+            logger.error(f"[DailyDataJob] Không thể kết nối exchange: {e}")
+            return
+
+        success = 0
+        failed  = 0
+        try:
+            for ds in datasets:
+                strategy = ds["strategy_name"]
+                symbol   = ds["symbol"]
+                tf       = ds["timeframe"]
+                try:
+                    result = await incremental_update(strategy, symbol, tf, exchange)
+                    inserted = result.get("total_inserted", 0)
+                    logger.info(
+                        f"[DailyDataJob] {strategy}/{symbol}/{tf}: "
+                        f"+{inserted} nến ({result.get('status')})"
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.error(f"[DailyDataJob] {strategy}/{symbol}/{tf} lỗi: {e}")
+                    failed += 1
+        finally:
+            await exchange.close()
+
+        logger.info(
+            f"[DailyDataJob] Hoàn tất: {success} dataset OK, {failed} lỗi"
+        )
+        # Lưu ngày chạy dù có lỗi một số dataset (để không chạy lại ngay)
+        await set_setting("last_ohlcv_update_date", today_str)
 
     async def stop(self):
         logger.info("Đang dừng BotManager và tất cả các BotEngine...")

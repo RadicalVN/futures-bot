@@ -2,11 +2,15 @@
 indicators.py — Technical Indicator Calculations
 MA (EMA/SMA), MACD, và các helper functions
 """
+import os
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 from loguru import logger
+
+# Đọc từ env, mặc định 500
+_MACD_SIGNAL_LENGTH = int(os.environ.get("MACD_SIGNAL_LENGTH", 500))
 
 
 @dataclass
@@ -191,7 +195,7 @@ def add_indicators_to_df(
 
     return df
 
-def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, factor=0.05, bb_length=50, bb_mult=2.0) -> pd.DataFrame:
+def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, factor=0.05, bb_length=50, bb_mult=2.0, momentum_n=3) -> pd.DataFrame:
     close = df['close']
     fastC = close.rolling(fast_len).mean()
     slowC = close.rolling(slow_len).mean()
@@ -290,24 +294,59 @@ def add_custom_sma_to_df(df: pd.DataFrame, fast_len=1, slow_len=5, len_c=200, fa
     df['custom_sma_momentum'] = momentum_state
     df['custom_sma_slope_pct'] = slope_pct_arr
     df['custom_sma_momentum_pct'] = momentum_pct_arr
-    
+
+    # ── Gia tốc n phiên: s[t-2n], s[t-n], s[t] ───────────────────────────────
+    momentum_n_state = np.full(len(df), 'yellow', dtype=object)
+    momentum_n_pct_arr = np.zeros(len(df))
+    min_idx = 2 * momentum_n  # cần ít nhất 2*n phiên trước
+    for i in range(min_idx, len(df)):
+        sma_t   = basis_arr[i]
+        sma_tn  = basis_arr[i - momentum_n]
+        sma_t2n = basis_arr[i - 2 * momentum_n]
+        if np.isnan(sma_t) or np.isnan(sma_tn) or np.isnan(sma_t2n):
+            continue
+        projected_n = 2 * sma_tn - sma_t2n
+        momentum_n_diff = sma_t - projected_n
+        momentum_n_pct_arr[i] = (momentum_n_diff / projected_n) * 100 if projected_n != 0 else 0
+
+        diff_n_older_to_prev = sma_t2n - sma_tn
+        diff_n_prev_to_curr  = sma_tn  - sma_t
+
+        if momentum_n_diff == 0:
+            momentum_n_state[i] = "yellow"
+        elif momentum_n_diff > 0:
+            if diff_n_older_to_prev > 0:
+                momentum_n_state[i] = "orange" if diff_n_prev_to_curr > 0 else "purple"
+            else:
+                momentum_n_state[i] = "blue"
+        else:
+            if diff_n_older_to_prev > 0:
+                momentum_n_state[i] = "red"
+            else:
+                momentum_n_state[i] = "green" if diff_n_prev_to_curr < 0 else "purple"
+
+    df['custom_sma_momentum_n']     = momentum_n_state
+    df['custom_sma_momentum_n_pct'] = momentum_n_pct_arr
+
     return df
 
 def add_custom_macd_to_df(
     df: pd.DataFrame,
     fast: int = 12,
     slow: int = 26,
-    signal_length: int = 500,
+    signal_length: int = None,
     src: str = "EMA",       # "EMA" | "SMA" — loại MA cho oscillator
     sig_type: str = "EMA",  # "EMA" | "SMA" — loại MA cho signal line
 ) -> pd.DataFrame:
     """
     Custom MACD - TuanTV1008
     Khác MACD chuẩn:
-    - signal_length mặc định 500 (chuẩn = 9) → Signal cực mượt
+    - signal_length mặc định lấy từ env MACD_SIGNAL_LENGTH (mặc định 500) → Signal cực mượt
     - Histogram 4 màu: above_grow / above_fall / below_grow / below_fall
     - Momentum cross markers trên MACD line và Signal line (giống Custom SMA)
     """
+    if signal_length is None:
+        signal_length = _MACD_SIGNAL_LENGTH
     close = df['close']
 
     # ── Tính MACD line ────────────────────────────────────────────────────────
@@ -378,11 +417,42 @@ def add_custom_macd_to_df(
     macd_arr   = macd_line.to_numpy()
     signal_arr = signal_line.to_numpy()
 
-    df['custom_macd']              = macd_line
-    df['custom_macd_signal']       = signal_line
-    df['custom_macd_hist']         = hist
-    df['custom_macd_hist_color']   = hist_color
-    df['custom_macd_momentum']     = _calc_momentum(macd_arr)
-    df['custom_macd_sig_momentum'] = _calc_momentum(signal_arr)
+    # ── Slope % cho MACD line và Signal line ──────────────────────────────────
+    # slope_pct[i]    = (curr - prev) / |prev| * 100
+    # momentum_pct[i] = (curr - projected) / |projected| * 100
+    #                   projected = 2*prev - older  (nội suy tuyến tính)
+    def _calc_slope_pct(arr: np.ndarray) -> np.ndarray:
+        slope = np.zeros(len(arr))
+        for i in range(1, len(arr)):
+            curr, prev = arr[i], arr[i - 1]
+            if np.isnan(curr) or np.isnan(prev) or prev == 0:
+                slope[i] = 0.0
+            else:
+                slope[i] = (curr - prev) / abs(prev) * 100
+        return slope
+
+    def _calc_momentum_pct(arr: np.ndarray) -> np.ndarray:
+        """Gia tốc %: độ lệch thực tế so với nội suy tuyến tính, chuẩn hoá theo |projected|."""
+        mom = np.zeros(len(arr))
+        for i in range(2, len(arr)):
+            curr, prev, older = arr[i], arr[i - 1], arr[i - 2]
+            if np.isnan(curr) or np.isnan(prev) or np.isnan(older):
+                continue
+            projected = 2 * prev - older
+            if projected == 0:
+                continue
+            mom[i] = (curr - projected) / abs(projected) * 100
+        return mom
+
+    df['custom_macd']               = macd_line
+    df['custom_macd_signal']        = signal_line
+    df['custom_macd_hist']          = hist
+    df['custom_macd_hist_color']    = hist_color
+    df['custom_macd_momentum']      = _calc_momentum(macd_arr)
+    df['custom_macd_sig_momentum']  = _calc_momentum(signal_arr)
+    df['custom_macd_slope_pct']     = _calc_slope_pct(macd_arr)
+    df['custom_macd_sig_slope_pct'] = _calc_slope_pct(signal_arr)
+    df['custom_macd_momentum_pct']      = _calc_momentum_pct(macd_arr)
+    df['custom_macd_sig_momentum_pct']  = _calc_momentum_pct(signal_arr)
 
     return df

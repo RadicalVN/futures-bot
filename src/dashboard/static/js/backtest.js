@@ -3,10 +3,53 @@
  * Handles form submission, result rendering, equity chart, trade table
  */
 import { showToast } from './ui.js';
+import { renderBacktestChart, scrollChartToTrade, destroyBacktestChart } from './backtest_chart.js';
 
 // Store full trade list for client-side filtering
 let _allTrades = [];
 let _equityChart = null;
+
+// ── Error display ─────────────────────────────────────────────────────────────
+
+function _showBacktestError(message) {
+  /**
+   * Hiển thị lỗi backtest đầy đủ trong panel riêng.
+   * Dùng cho các lỗi quan trọng như thiếu data, gap data, v.v.
+   */
+  // Tìm hoặc tạo error panel
+  let panel = document.getElementById('btErrorPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'btErrorPanel';
+    panel.style.cssText = [
+      'background:#2a0a0a', 'border:1px solid #f6465d', 'border-radius:8px',
+      'padding:16px 20px', 'margin-bottom:20px', 'display:none',
+    ].join(';');
+    // Chèn vào đầu form backtest
+    const form = document.getElementById('btStrategyForm') || document.getElementById('btBotForm');
+    if (form) form.parentNode.insertBefore(panel, form);
+  }
+
+  // Format message: xuống dòng → <br>, ❌ → icon đỏ
+  const formatted = message
+    .replace(/\n/g, '<br>')
+    .replace(/→/g, '<span style="color:#F0B90B">→</span>');
+
+  panel.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+      <div>
+        <div style="color:#f6465d; font-weight:bold; margin-bottom:8px; font-size:15px;">
+          ⚠️ Backtest thất bại
+        </div>
+        <div style="color:#ffb3b3; font-size:13px; line-height:1.6;">${formatted}</div>
+      </div>
+      <button onclick="document.getElementById('btErrorPanel').style.display='none'"
+        style="background:none; border:none; color:#888; cursor:pointer; font-size:18px; margin-left:12px; flex-shrink:0;">✕</button>
+    </div>
+  `;
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
@@ -98,6 +141,10 @@ export async function runBacktest(e) {
   btn.disabled = true;
   btn.textContent = '⏳ Đang chạy...';
 
+  // Ẩn error panel cũ nếu có
+  const errPanel = document.getElementById('btErrorPanel');
+  if (errPanel) errPanel.style.display = 'none';
+
   try {
     const { job_id } = await apiStartBacktest({
       bot_id: botId,
@@ -122,40 +169,147 @@ export async function runBacktest(e) {
 }
 
 async function _pollJob(jobId) {
-  const loadingEl = document.getElementById('btLoading');
-  const progressEl = document.getElementById('btProgressBar');
-  const progressTextEl = document.getElementById('btProgressText');
+  const loadingEl     = document.getElementById('btLoading');
+  const progressEl    = document.getElementById('btProgressBar');
+  const progressTextEl= document.getElementById('btProgressText');
+  const progressPctEl = document.getElementById('btProgressPct');
+  const elapsedEl     = document.getElementById('btElapsedTime');
+  const spinnerEl     = document.getElementById('btLoadingSpinner');
+
+  const startTime = Date.now();
+
+  // Cập nhật elapsed time mỗi giây
+  const elapsedTimer = setInterval(() => {
+    const sec = Math.floor((Date.now() - startTime) / 1000);
+    if (elapsedEl) {
+      elapsedEl.textContent = sec < 60
+        ? `${sec}s`
+        : `${Math.floor(sec / 60)}m ${sec % 60}s`;
+    }
+  }, 1000);
+
+  /**
+   * Map progress % → step index (1-5):
+   *  0–8%   → step 1: Kiểm tra dữ liệu
+   *  8–15%  → step 2: Đọc DB
+   *  15–25% → step 3: Tính indicators
+   *  25–90% → step 4: Simulate
+   *  90–100%→ step 5: Thống kê & Excel
+   */
+  function _updateSteps(pct, message) {
+    let activeStep = 1;
+    if (pct >= 90) activeStep = 5;
+    else if (pct >= 25) activeStep = 4;
+    else if (pct >= 15) activeStep = 3;
+    else if (pct >= 8)  activeStep = 2;
+
+    for (let s = 1; s <= 5; s++) {
+      const el = document.getElementById(`btStep${s}`);
+      if (!el) continue;
+      const icon  = el.querySelector('.bt-step-icon');
+      const label = el.querySelector('.bt-step-label');
+      const detail = el.querySelector('.bt-step-detail');
+
+      el.classList.remove('active', 'done');
+      if (s < activeStep) {
+        el.classList.add('done');
+        if (icon) icon.textContent = '✅';
+        if (label) label.style.color = 'var(--text-secondary)';
+      } else if (s === activeStep) {
+        el.classList.add('active');
+        if (icon) icon.textContent = '🔄';
+        if (label) label.style.color = 'var(--text-primary)';
+        // Hiển thị message chi tiết ở step đang active
+        if (detail) detail.textContent = message || '';
+        else {
+          // Thêm detail span nếu chưa có
+          const span = document.createElement('span');
+          span.className = 'bt-step-detail';
+          span.textContent = message || '';
+          el.appendChild(span);
+        }
+      } else {
+        if (icon) icon.textContent = '⬜';
+        if (label) label.style.color = 'var(--text-secondary)';
+        // Xóa detail của step chưa đến
+        const detail2 = el.querySelector('.bt-step-detail');
+        if (detail2) detail2.textContent = '';
+      }
+    }
+  }
+
+  function _markAllDone() {
+    for (let s = 1; s <= 5; s++) {
+      const el = document.getElementById(`btStep${s}`);
+      if (!el) continue;
+      el.classList.remove('active');
+      el.classList.add('done');
+      const icon = el.querySelector('.bt-step-icon');
+      if (icon) icon.textContent = '✅';
+    }
+    if (spinnerEl) spinnerEl.style.animation = 'none';
+    if (spinnerEl) spinnerEl.textContent = '✅';
+  }
 
   while (true) {
-    await new Promise(r => setTimeout(r, 2000));  // chờ 2s
+    await new Promise(r => setTimeout(r, 1500));  // poll mỗi 1.5s
 
     let job;
     try {
       job = await apiPollProgress(jobId);
     } catch (e) {
+      clearInterval(elapsedTimer);
       showToast('Mất kết nối khi poll progress', 'error');
       loadingEl.style.display = 'none';
       return;
     }
 
-    // Cập nhật progress bar
-    if (progressEl) progressEl.style.width = `${job.progress}%`;
-    if (progressTextEl) progressTextEl.textContent = `${job.progress}% — ${job.message}`;
+    const pct = job.progress || 0;
+    const msg = job.message || '';
+
+    // Cập nhật progress bar và text
+    if (progressEl)     progressEl.style.width = `${pct}%`;
+    if (progressPctEl)  progressPctEl.textContent = `${pct}%`;
+    if (progressTextEl) progressTextEl.textContent = msg;
+
+    // Cập nhật steps
+    _updateSteps(pct, msg);
 
     if (job.status === 'done') {
-      loadingEl.style.display = 'none';
+      clearInterval(elapsedTimer);
+      _markAllDone();
+      if (progressEl) progressEl.style.width = '100%';
+      if (progressPctEl) progressPctEl.textContent = '100%';
+
+      // Ẩn loading sau 800ms để user thấy 100%
+      setTimeout(() => { loadingEl.style.display = 'none'; }, 800);
+
       const result = job.result;
       _allTrades = result.trades || [];
       _renderSummary(result);
       _renderEquityChart(result.equity_curve || []);
       _renderTrades(_allTrades);
-      showToast(`Backtest hoàn tất — ${result.summary.total_trades} lệnh`, 'success');
+
+      // Vẽ backtest chart (candlestick + indicators + entry/exit)
+      renderBacktestChart(jobId);
+
+      const sec = Math.floor((Date.now() - startTime) / 1000);
+      const timeStr = sec < 60 ? `${sec}s` : `${Math.floor(sec/60)}m ${sec%60}s`;
+      showToast(`✅ Backtest hoàn tất — ${result.summary.total_trades} lệnh (${timeStr})`, 'success');
       return;
     }
 
     if (job.status === 'error') {
+      clearInterval(elapsedTimer);
       loadingEl.style.display = 'none';
-      showToast(`Lỗi backtest: ${job.error}`, 'error');
+      // Hiển thị lỗi đầy đủ — đặc biệt quan trọng với lỗi thiếu data
+      const errMsg = job.error || job.message || 'Lỗi không xác định';
+      // Nếu lỗi dài (thiếu data, gap...) → hiển thị trong panel riêng thay vì toast
+      if (errMsg.length > 80 || errMsg.includes('❌')) {
+        _showBacktestError(errMsg);
+      } else {
+        showToast(`Lỗi backtest: ${errMsg}`, 'error');
+      }
       return;
     }
     // status === 'running' → tiếp tục poll
@@ -176,7 +330,12 @@ function _renderSummary(result) {
 
   // Hiển thị thông tin kỳ backtest
   const tfLabel = result.timeframe || '?';
-  const periodLabel = `${result.start_date || ''} → ${result.end_date || 'nay'} | TF: ${tfLabel} | ${result.symbol}`;
+  const commLabel = s.commission_pct != null ? ` | Comm: ${(s.commission_pct * 100).toFixed(3)}%` : '';
+  const slipLabel = s.slippage_pct != null && s.slippage_pct > 0 ? ` | Slip: ${(s.slippage_pct * 100).toFixed(3)}%` : '';
+  const periodLabel = `${result.start_date || ''} → ${result.end_date || 'nay'} | TF: ${tfLabel} | ${result.symbol}${commLabel}${slipLabel}`;
+
+  const mddEqPct = s.mdd_equity_pct ?? s.max_drawdown_pct;
+  const mddColor = mddEqPct > 20 ? '#f6465d' : mddEqPct > 10 ? '#F0B90B' : '#b0b8c1';
 
   const metrics = [
     { label: 'Tổng lệnh',        val: s.total_trades,                    color: '' },
@@ -185,7 +344,6 @@ function _renderSummary(result) {
     { label: 'Tổng PnL (USDT)',  val: `${s.total_pnl >= 0 ? '+' : ''}${s.total_pnl}`, color: pnlColor },
     { label: 'Lợi nhuận (%)',    val: `${s.total_return_pct >= 0 ? '+' : ''}${s.total_return_pct}%`, color: retColor },
     { label: 'Vốn cuối (USDT)',  val: s.final_balance,                   color: retColor },
-    { label: 'Max Drawdown',     val: `-${s.max_drawdown_pct}%`,         color: ddColor },
     { label: 'Profit Factor',    val: s.profit_factor === Infinity ? '∞' : s.profit_factor, color: pfColor },
     { label: 'Sharpe Ratio',     val: s.sharpe_ratio,                    color: srColor },
     { label: 'TB Thắng (USDT)',  val: `+${s.avg_win}`,                   color: '#0ecb81' },
@@ -193,25 +351,83 @@ function _renderSummary(result) {
     { label: 'Lớn nhất Thắng',  val: `+${s.largest_win}`,               color: '#0ecb81' },
     { label: 'Lớn nhất Thua',   val: s.largest_loss,                    color: '#f6465d' },
     { label: 'TB giữ (nến)',     val: s.avg_holding_candles,             color: '' },
+    { label: 'Tổng hoa hồng',   val: s.total_commission != null ? `-${s.total_commission}` : '-', color: '#f6465d' },
+    { label: 'Tổng trượt giá',  val: s.total_slippage_cost != null ? `-${s.total_slippage_cost}` : '-', color: s.total_slippage_cost > 0 ? '#f6465d' : '' },
   ];
 
-  document.getElementById('btSummaryGrid').innerHTML = metrics.map(m => `
+  // MDD block riêng — hiển thị nổi bật bên dưới metrics chính
+  const mddRecovery = s.mdd_recovery_days != null
+    ? `${s.mdd_recovery_days} ngày`
+    : '<span style="color:#f6465d">⚠ Chưa hồi phục</span>';
+  const mddHtml = `
+    <div style="margin-top:16px; padding:14px 16px; background:rgba(197,90,17,0.12);
+                border:1px solid rgba(197,90,17,0.4); border-radius:8px;">
+      <div style="font-size:12px; font-weight:700; color:#C55A11; margin-bottom:10px; letter-spacing:0.5px;">
+        🔥 PHÂN TÍCH MAX DRAWDOWN (EQUITY CURVE)
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px;">
+        <div class="stat-card" style="border:1px solid rgba(197,90,17,0.3);">
+          <h3>MDD Equity (%)</h3>
+          <div class="val" style="color:${mddColor}">-${mddEqPct}%</div>
+        </div>
+        <div class="stat-card" style="border:1px solid rgba(197,90,17,0.3);">
+          <h3>MDD Equity (USDT)</h3>
+          <div class="val" style="color:#f6465d">-${s.mdd_equity_usdt ?? '-'}</div>
+        </div>
+        <div class="stat-card" style="border:1px solid rgba(197,90,17,0.3);">
+          <h3>MDD Duration</h3>
+          <div class="val" style="color:#f6465d">${s.mdd_duration_days != null ? s.mdd_duration_days + ' ngày' : '-'}</div>
+        </div>
+        <div class="stat-card" style="border:1px solid rgba(197,90,17,0.3);">
+          <h3>MDD Recovery</h3>
+          <div class="val">${mddRecovery}</div>
+        </div>
+        <div class="stat-card" style="border:1px solid rgba(197,90,17,0.3);">
+          <h3>MDD (đóng lệnh)</h3>
+          <div class="val" style="color:${ddColor}">-${s.max_drawdown_pct}%</div>
+        </div>
+        <div class="stat-card" style="border:1px solid rgba(197,90,17,0.3);">
+          <h3>Đỉnh → Đáy</h3>
+          <div class="val" style="font-size:11px; color:#b0b8c1;">
+            ${s.mdd_peak_ts || '-'}<br>→ ${s.mdd_trough_ts || '-'}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const metricsHtml = metrics.map(m => `
     <div class="stat-card">
       <h3>${m.label}</h3>
       <div class="val" style="${m.color ? `color:${m.color}` : ''}">${m.val}</div>
     </div>
   `).join('');
 
-  // Hiển thị period info dưới tiêu đề
-  const periodEl = document.getElementById('btPeriodInfo');
-  if (periodEl) periodEl.textContent = periodLabel;
+  const fullHtml = metricsHtml + mddHtml;
 
-  // Download link
-  const dl = document.getElementById('btDownloadLink');
-  dl.href = result.download_url;
-  dl.download = result.excel_filename;
+  // Detect active tab: strategy tab or bot tab
+  const isStrategyTab = document.getElementById('btPanelStrategy')?.style.display !== 'none';
 
-  document.getElementById('btSummaryCard').style.display = 'block';
+  if (isStrategyTab) {
+    // Strategy tab: render into btSSummaryCard
+    const card = document.getElementById('btSSummaryCard');
+    if (card) {
+      document.getElementById('btSSummaryGrid').innerHTML = fullHtml;
+      const periodEl = document.getElementById('btSPeriodInfo');
+      if (periodEl) periodEl.textContent = periodLabel;
+      const dl = document.getElementById('btSDownloadLink');
+      if (dl) { dl.href = result.download_url; dl.download = result.excel_filename; }
+      card.style.display = 'block';
+    }
+  } else {
+    // Bot tab: render into btSummaryCard
+    document.getElementById('btSummaryGrid').innerHTML = fullHtml;
+    const periodEl = document.getElementById('btPeriodInfo');
+    if (periodEl) periodEl.textContent = periodLabel;
+    const dl = document.getElementById('btDownloadLink');
+    if (dl) { dl.href = result.download_url; dl.download = result.excel_filename; }
+    document.getElementById('btSummaryCard').style.display = 'block';
+  }
 }
 
 // ── Equity Chart ──────────────────────────────────────────────────────────────
@@ -317,11 +533,12 @@ function _renderTrades(trades) {
   }
 
   tbody.innerHTML = trades.map((t, i) => {
-    const pnlColor = t.pnl >= 0 ? '#0ecb81' : '#f6465d';
+    const pnlColor  = t.pnl >= 0 ? '#0ecb81' : '#f6465d';
     const sideColor = t.side === 'long' ? '#0ecb81' : '#f6465d';
-    const rowBg = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02)';
+    const rowBg     = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02)';
     return `
-      <tr style="${rowBg}">
+      <tr style="${rowBg}; cursor:pointer;" data-trade-idx="${i}"
+          title="Click để xem trên biểu đồ">
         <td>${i + 1}</td>
         <td style="font-size:12px;">${t.entry_time}</td>
         <td style="font-size:12px;">${t.exit_time}</td>
@@ -335,6 +552,17 @@ function _renderTrades(trades) {
       </tr>
     `;
   }).join('');
+
+  // Click vào row → scroll chart đến lệnh đó
+  tbody.querySelectorAll('tr[data-trade-idx]').forEach(row => {
+    row.addEventListener('click', () => {
+      const idx = parseInt(row.getAttribute('data-trade-idx'));
+      scrollChartToTrade(idx);
+      // Scroll lên chart
+      const container = document.getElementById('btChartContainer');
+      if (container) container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 }
 
 export function filterBtTrades() {
@@ -355,11 +583,16 @@ function _fmt(n) {
 
 function _resetResults() {
   document.getElementById('btSummaryCard').style.display  = 'none';
+  const sCard = document.getElementById('btSSummaryCard');
+  if (sCard) sCard.style.display = 'none';
   document.getElementById('btEquityCard').style.display   = 'none';
   document.getElementById('btTradesCard').style.display   = 'none';
   document.getElementById('btLoading').style.display      = 'none';
+  const chartContainer = document.getElementById('btChartContainer');
+  if (chartContainer) chartContainer.style.display = 'none';
   _allTrades = [];
   if (_equityChart) { _equityChart.destroy(); _equityChart = null; }
+  destroyBacktestChart();
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -390,6 +623,10 @@ export function onStrategyChange() {
   document.getElementById('btSV2Params').style.display = (v === 'sma_macd_cross_v2' || v === 'sma_macd_cross_v3') ? 'block' : 'none';
   document.getElementById('btSV3Params').style.display = (v === 'sma_macd_cross_v3') ? 'block' : 'none';
   document.getElementById('btSV4Params').style.display = (v === 'sma_macd_cross_v4' || v === 'sma_macd_cross_v5') ? 'block' : 'none';
+  document.getElementById('btSAdtsParams').style.display = (v === 'adts') ? 'block' : 'none';
+  // bb_length field: hide for ADTS (uses its own bbwidth_sma_period)
+  const bbLenGroup = document.getElementById('btSBbLengthGroup');
+  if (bbLenGroup) bbLenGroup.style.display = (v === 'adts') ? 'none' : 'block';
 }
 
 // ── Run strategy backtest ─────────────────────────────────────────────────────
@@ -439,11 +676,39 @@ export async function runStrategyBacktest(e) {
   if (sl)       payload.stop_loss_pct  = parseFloat(sl);
   if (tp)       payload.take_profit_pct = parseFloat(tp);
 
-  _resetResults();
-  document.getElementById('btLoading').style.display = 'block';
+  // ADTS params
+  const adxThr   = document.getElementById('btSAdxThreshold')?.value;
+  const emgAdx   = document.getElementById('btSEmgAdx')?.value;
+  const slAtr    = document.getElementById('btSSlAtr')?.value;
+  const tp1Rr    = document.getElementById('btSTp1Rr')?.value;
+  const tp2Trail = document.getElementById('btSTp2Trail')?.value;
+  const riskPct  = document.getElementById('btSRiskPct')?.value;
+  const bbwSma   = document.getElementById('btSBbwSma')?.value;
+  const adtsLev  = document.getElementById('btSAdtsLeverage')?.value;
+  if (adxThr)   payload.adts_adx_threshold            = parseFloat(adxThr);
+  if (emgAdx)   payload.adts_emergency_adx_threshold  = parseFloat(emgAdx);
+  if (slAtr)    payload.adts_sl_atr_mult               = parseFloat(slAtr);
+  if (document.getElementById('btSHardSlPct')?.value)
+    payload.adts_hard_sl_pct = parseFloat(document.getElementById('btSHardSlPct').value) / 100;
+  if (tp1Rr)    payload.adts_tp1_rr                    = parseFloat(tp1Rr);
+  if (tp2Trail) payload.adts_tp2_trail_atr_mult        = parseFloat(tp2Trail);
+  if (riskPct)  payload.adts_risk_pct                  = parseFloat(riskPct) / 100;
+  if (bbwSma)   payload.adts_bbwidth_sma_period        = parseInt(bbwSma);
+  if (adtsLev)  payload.adts_leverage                  = parseInt(adtsLev);
+
+  // Phí giao dịch & trượt giá — dùng chung cho mọi chiến lược
+  const commission = document.getElementById('btSCommission')?.value;
+  const slippage   = document.getElementById('btSSlippage')?.value;
+  if (commission) payload.commission_pct = parseFloat(commission) / 100;
+  if (slippage)   payload.slippage_pct   = parseFloat(slippage) / 100;
+
   const btn = document.getElementById('btSRunBtn');
   btn.disabled = true;
   btn.textContent = '⏳ Đang chạy...';
+
+  // Ẩn error panel cũ nếu có
+  const errPanel = document.getElementById('btErrorPanel');
+  if (errPanel) errPanel.style.display = 'none';
 
   try {
     const r = await fetch('/api/backtest/run-strategy', {

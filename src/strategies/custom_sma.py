@@ -31,6 +31,7 @@ class CustomSMAStrategy(BaseStrategy):
         self.trend_factor = self.get_param("factor", 0.05)
         self.bb_length = self.get_param("bb_length", 50)
         self.bb_mult = self.get_param("bb_mult", 2.0)
+        self.momentum_n = self.get_param("momentum_n", 3)  # Bước nhảy n phiên để tính gia tốc dài hạn
 
     async def analyze(self, symbol: str, ohlcv_data: list, current_positions: list) -> StrategySignal:
         """
@@ -158,25 +159,34 @@ class CustomSMAStrategy(BaseStrategy):
         sma_slope_pct = 0.0
         momentum_pct = 0.0
         momentum_state = "Chưa rõ"
-        if len(basis) >= 3 and not pd.isna(basis.iloc[-3]):
+        momentum_n_pct = 0.0
+        momentum_n_state = "Chưa rõ"
+
+        n = self.momentum_n  # Bước nhảy n phiên cho gia tốc dài hạn
+
+        # Cần ít nhất 3 điểm cho gia tốc 1 phiên, và 2*n+1 điểm cho gia tốc n phiên
+        min_required = max(3, 2 * n + 1)
+
+        if len(basis) >= min_required and not pd.isna(basis.iloc[-min_required]):
             current_sma = basis.iloc[-1]
             prev_sma = basis.iloc[-2]
             older_sma = basis.iloc[-3]
-            
+
             # Tính toán sự thay đổi giữa các kỳ (Tương đương sma21, sma10 trong Pine Script)
             diff_older_to_prev = older_sma - prev_sma
             diff_prev_to_curr = prev_sma - current_sma
-            
+
             sma_slope = current_sma - prev_sma
             sma_slope_pct = (sma_slope / prev_sma) * 100 if prev_sma != 0 else 0
-            
+
+            # --- Gia tốc 1 phiên (hiện tại) ---
             # Dự phóng giá trị SMA hiện tại theo nội suy tuyến tính (Tương đương sma0Hope)
             projected_current_sma = 2 * prev_sma - older_sma
-            
+
             # Động lượng xu hướng: so sánh thực tế với dự phóng (Tương đương biến trend)
             momentum_diff = current_sma - projected_current_sma
             momentum_pct = (momentum_diff / projected_current_sma) * 100 if projected_current_sma != 0 else 0
-            
+
             if momentum_diff == 0:
                 momentum_state = "Vàng (Giữ nguyên xu hướng)"
             elif momentum_diff > 0:
@@ -196,22 +206,62 @@ class CustomSMAStrategy(BaseStrategy):
                     else:
                         momentum_state = "Tím (Đảo chiều giảm)"
 
+            # --- Gia tốc n phiên ---
+            # Lấy 3 điểm cách nhau n phiên: s[t-2n], s[t-n], s[t]
+            # Gia tốc = s[t] - 2*s[t-n] + s[t-2n]  (finite difference bậc 2 bước n)
+            sma_t = basis.iloc[-1]
+            sma_tn = basis.iloc[-(n + 1)]       # s[t-n]
+            sma_t2n = basis.iloc[-(2 * n + 1)]  # s[t-2n]
+
+            diff_n_older_to_prev = sma_t2n - sma_tn   # vận tốc kỳ trước (n phiên)
+            diff_n_prev_to_curr = sma_tn - sma_t       # vận tốc kỳ này (n phiên), đảo dấu để đồng hướng
+
+            projected_n = 2 * sma_tn - sma_t2n         # dự phóng tuyến tính tại t
+            momentum_n_diff = sma_t - projected_n       # gia tốc n phiên
+            momentum_n_pct = (momentum_n_diff / projected_n) * 100 if projected_n != 0 else 0
+
+            if momentum_n_diff == 0:
+                momentum_n_state = "Vàng (Giữ nguyên xu hướng)"
+            elif momentum_n_diff > 0:
+                if diff_n_older_to_prev > 0:
+                    if diff_n_prev_to_curr > 0:
+                        momentum_n_state = "Cam (Giảm/Hãm độ dốc xuống)"
+                    else:
+                        momentum_n_state = "Tím (Đảo chiều tăng)"
+                else:
+                    momentum_n_state = "Xanh dương (Tăng độ dốc lên)"
+            else:
+                if diff_n_older_to_prev > 0:
+                    momentum_n_state = "Đỏ (Tăng độ dốc xuống)"
+                else:
+                    if diff_n_prev_to_curr < 0:
+                        momentum_n_state = "Xanh lá (Giảm/Hãm độ dốc lên)"
+                    else:
+                        momentum_n_state = "Tím (Đảo chiều giảm)"
+
         final_signal = "none"
-        reason = f"Chờ tín hiệu | Momentum MA: {momentum_state} ({momentum_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%"
+        reason = (f"Chờ tín hiệu | Momentum(1): {momentum_state} ({momentum_pct:.4f}%) | "
+                  f"Momentum({n}): {momentum_n_state} ({momentum_n_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%")
         
         # Crossover buy/sell signals
         if current_trend == 1 and prev_trend == -1:
             if sma_slope_pct >= min_slope_pct and momentum_pct >= min_momentum_pct:
                 final_signal = "long"
-                reason = f"Mở LONG: Custom SMA báo Trend Tăng | Momentum MA: {momentum_state} ({momentum_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%"
+                reason = (f"Mở LONG: Custom SMA báo Trend Tăng | "
+                          f"Momentum(1): {momentum_state} ({momentum_pct:.4f}%) | "
+                          f"Momentum({n}): {momentum_n_state} ({momentum_n_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%")
             else:
-                reason = f"Bỏ qua LONG: Độ dốc hoặc Gia tốc không đạt ngưỡng | Momentum: {momentum_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%"
+                reason = (f"Bỏ qua LONG: Độ dốc hoặc Gia tốc không đạt ngưỡng | "
+                          f"Momentum(1): {momentum_pct:.4f}% | Momentum({n}): {momentum_n_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%")
         elif current_trend == -1 and prev_trend == 1:
             if sma_slope_pct <= -min_slope_pct and momentum_pct <= -min_momentum_pct:
                 final_signal = "short"
-                reason = f"Mở SHORT: Custom SMA báo Trend Giảm | Momentum MA: {momentum_state} ({momentum_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%"
+                reason = (f"Mở SHORT: Custom SMA báo Trend Giảm | "
+                          f"Momentum(1): {momentum_state} ({momentum_pct:.4f}%) | "
+                          f"Momentum({n}): {momentum_n_state} ({momentum_n_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%")
             else:
-                reason = f"Bỏ qua SHORT: Độ dốc hoặc Gia tốc không đạt ngưỡng | Momentum: {momentum_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%"
+                reason = (f"Bỏ qua SHORT: Độ dốc hoặc Gia tốc không đạt ngưỡng | "
+                          f"Momentum(1): {momentum_pct:.4f}% | Momentum({n}): {momentum_n_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%")
 
         current_price = close_prices.iloc[-1]
 
@@ -245,6 +295,13 @@ class CustomSMAStrategy(BaseStrategy):
         elif "Xanh lá" in momentum_state: momentum_color = "green"
         elif "Tím" in momentum_state: momentum_color = "purple"
 
+        momentum_n_color = "yellow"
+        if "Đỏ" in momentum_n_state: momentum_n_color = "red"
+        elif "Cam" in momentum_n_state: momentum_n_color = "orange"
+        elif "Xanh dương" in momentum_n_state: momentum_n_color = "blue"
+        elif "Xanh lá" in momentum_n_state: momentum_n_color = "green"
+        elif "Tím" in momentum_n_state: momentum_n_color = "purple"
+
         metadata = {
             "plots": [
                 {
@@ -268,6 +325,14 @@ class CustomSMAStrategy(BaseStrategy):
                     "style": "cross",
                     "linewidth": 3,
                     "tooltip": momentum_state
+                },
+                {
+                    "name": f"SMA-{n}",
+                    "value": float(current_sma) if not pd.isna(current_sma) else None,
+                    "color": momentum_n_color,
+                    "style": "cross",
+                    "linewidth": 5,
+                    "tooltip": f"[{n}p] {momentum_n_state} ({momentum_n_pct:.4f}%)"
                 }
             ],
             "bands": {
@@ -277,7 +342,9 @@ class CustomSMAStrategy(BaseStrategy):
             },
             "extra_info": {
                 "slope_pct": round(sma_slope_pct, 4) if 'sma_slope_pct' in locals() else 0.0,
-                "momentum_pct": round(momentum_pct, 4) if 'momentum_pct' in locals() else 0.0
+                "momentum_pct": round(momentum_pct, 4) if 'momentum_pct' in locals() else 0.0,
+                "momentum_n_pct": round(momentum_n_pct, 4) if 'momentum_n_pct' in locals() else 0.0,
+                "momentum_n": n
             }
         }
 
