@@ -83,6 +83,9 @@ function renderHtmlLegend(chartId) {
         else if (ds.label === 'Signal Slope') color = '#2196F3';
         else if (ds.label === 'Signal Accel') color = '#9C27B0';
         else if (ds.label === 'TVT-MA Accel') color = '#9C27B0';
+        else if (ds.label === 'ADX') color = '#FF9800';
+        else if (ds.label === '+DI') color = '#0ecb81';
+        else if (ds.label === '-DI') color = '#f6465d';
         else if (ds.label === 'TVT-MA-Cross') color = '#FFEB3B';
         else if (ds.label === 'TVT-MA-Cross-N') color = '#FF9800';
         
@@ -243,7 +246,7 @@ export async function loadChart(chartId = 1) {
     try {
         const json = await api.getChartData(symbol, timeframe);
         document.getElementById(`chartTitle${chartId}`).innerText = `Biểu đồ ${chartId} - ${symbol} (${timeframe})`;
-        renderChart(json.data, chartId);
+        renderChart(json.data, chartId, json.adx_threshold ?? 25);
         
         lastChartUpdateTimes[chartId] = new Date();
         if(statusLabel) {
@@ -395,6 +398,14 @@ async function silentFetchChart(chartId) {
                     ds.data = mergeData(ds.data, sigAccelData);
                     ds.backgroundColor = newData.map(d => MOM_COLOR_MAP[d.macd_sig_momentum] || '#888');
                 }
+                if(ds.label === 'ADX') {
+                    ds.data = mergeData(ds.data, newData.map(d => ({x: d.x, y: d.adx ?? null})));
+                    // Reapply segment coloring với threshold mới nhất
+                    const _thr = chartInstances[chartId]._adxThreshold ?? 25;
+                    ds.segment = { borderColor: (ctx) => { const v = ctx.p1?.parsed?.y; return v == null ? '#888' : v > _thr ? '#2196F3' : '#f6465d'; } };
+                }
+                if(ds.label === '+DI') ds.data = mergeData(ds.data, newData.map(d => ({x: d.x, y: d.adx_plus_di ?? null})));
+                if(ds.label === '-DI') ds.data = mergeData(ds.data, newData.map(d => ({x: d.x, y: d.adx_minus_di ?? null})));
             });
 
             // Khôi phục trạng thái hidden sau khi merge
@@ -407,7 +418,7 @@ async function silentFetchChart(chartId) {
 
             chartInstances[chartId].update('none'); // Update ngầm
         } else {
-            renderChart(json.data, chartId);
+            renderChart(json.data, chartId, json.adx_threshold ?? 25);
         }
         
         lastChartUpdateTimes[chartId] = new Date();
@@ -550,6 +561,9 @@ async function handlePanZoom({chart}, chartId) {
                         ds.data = sigAccelDataPan.concat(ds.data);
                         ds.backgroundColor = newData.map(d => MOM_COLOR_MAP_PAN[d.macd_sig_momentum] || '#888').concat(ds.backgroundColor || []);
                     }
+                    if(ds.label === 'ADX') ds.data = newData.map(d => ({x: d.x, y: d.adx ?? null})).concat(ds.data);
+                    if(ds.label === '+DI') ds.data = newData.map(d => ({x: d.x, y: d.adx_plus_di ?? null})).concat(ds.data);
+                    if(ds.label === '-DI') ds.data = newData.map(d => ({x: d.x, y: d.adx_minus_di ?? null})).concat(ds.data);
                 });
 
                 // Khôi phục trạng thái hidden sau khi concat
@@ -613,7 +627,7 @@ function syncPanZoom({chart}, sourceChartId) {
 
 let isSyncingHover = false;
 
-function renderChart(data, chartId) {
+function renderChart(data, chartId, adxThreshold = 25) {
     const canvas = document.getElementById(`tradingChart${chartId}`);
     const ctx = canvas.getContext('2d');
     
@@ -1006,6 +1020,38 @@ function renderChart(data, chartId) {
             categoryPercentage: 1.0,
             yAxisID: 'y_sig_slope'
         });
+
+        // ── ADX panel ─────────────────────────────────────────────────────────
+        const adxData      = data.map(d => ({ x: d.x, y: d.adx          ?? null }));
+        const adxPlusDiData  = data.map(d => ({ x: d.x, y: d.adx_plus_di  ?? null }));
+        const adxMinusDiData = data.map(d => ({ x: d.x, y: d.adx_minus_di ?? null }));
+        // Màu ADX: xanh dương khi ADX > ngưỡng, đỏ khi ≤ ngưỡng
+        const _adxSegColor = (ctx) => {
+            const v = ctx.p1?.parsed?.y;
+            if (v == null) return '#888';
+            return v > adxThreshold ? '#2196F3' : '#f6465d';
+        };
+        datasets.push({
+            type: 'line', label: 'ADX',
+            data: adxData, spanGaps: true,
+            segment: { borderColor: _adxSegColor },
+            borderWidth: 2, pointRadius: 0,
+            yAxisID: 'y_adx'
+        });
+        datasets.push({
+            type: 'line', label: '+DI',
+            data: adxPlusDiData, spanGaps: true,
+            borderColor: '#0ecb81', borderWidth: 1.2, pointRadius: 0,
+            borderDash: [3, 3],
+            yAxisID: 'y_adx'
+        });
+        datasets.push({
+            type: 'line', label: '-DI',
+            data: adxMinusDiData, spanGaps: true,
+            borderColor: '#f6465d', borderWidth: 1.2, pointRadius: 0,
+            borderDash: [3, 3],
+            yAxisID: 'y_adx'
+        });
     }
 
     let chartScales = {
@@ -1061,6 +1107,20 @@ function renderChart(data, chartId) {
                 }
             },
             stack: 'main', stackWeight: 0.6
+        };
+        // Panel ADX nằm dưới cùng
+        chartScales.y_adx = {
+            type: 'linear', display: true, position: 'right',
+            min: 0, max: 100,
+            grid: { color: 'rgba(0,0,0,0.08)', drawOnChartArea: true },
+            ticks: {
+                color: '#FF9800',
+                maxTicksLimit: 4,
+                callback: function(val, index, ticks) {
+                    return index === ticks.length - 1 ? '' : val.toFixed(0);
+                }
+            },
+            stack: 'main', stackWeight: 0.7
         };
     }
 
@@ -1225,6 +1285,36 @@ function renderChart(data, chartId) {
                     ctx.strokeStyle = 'rgba(150,150,150,0.5)';
                     ctx.stroke();
                     ctx.setLineDash([]);
+                }
+                ctx.restore();
+            }
+            // Vẽ nền + đường kẻ + đường ngưỡng cho panel ADX
+            if (chart.scales.y_adx) {
+                const yAdxAxis = chart.scales.y_adx;
+                const _thr = chart._adxThreshold ?? 25;
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+                ctx.fillRect(chart.chartArea.left, yAdxAxis.top, chart.chartArea.right - chart.chartArea.left, yAdxAxis.bottom - yAdxAxis.top);
+                ctx.beginPath();
+                ctx.moveTo(chart.chartArea.left, yAdxAxis.top);
+                ctx.lineTo(chart.chartArea.right, yAdxAxis.top);
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#555';
+                ctx.stroke();
+                // Đường ngưỡng ADX động
+                const yThr = yAdxAxis.getPixelForValue(_thr);
+                if (!isNaN(yThr)) {
+                    ctx.beginPath();
+                    ctx.setLineDash([4, 4]);
+                    ctx.moveTo(chart.chartArea.left, yThr);
+                    ctx.lineTo(chart.chartArea.right, yThr);
+                    ctx.lineWidth = 1;
+                    ctx.strokeStyle = 'rgba(33,150,243,0.7)';
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.font = '10px Inter,sans-serif';
+                    ctx.fillStyle = 'rgba(33,150,243,0.9)';
+                    ctx.fillText(_thr, chart.chartArea.right + 2, yThr + 4);
                 }
                 ctx.restore();
             }
@@ -1437,6 +1527,9 @@ function renderChart(data, chartId) {
         },
         plugins: [splitPanePlugin, customCanvasBackgroundColor, currentPricePlugin, crosshairPlugin]
     });
+
+    // Lưu ngưỡng ADX để splitPanePlugin dùng khi vẽ đường ngưỡng
+    chartInstances[chartId]._adxThreshold = adxThreshold;
 }
 
 // ── Scroll to latest candle ───────────────────────────────────────────────────

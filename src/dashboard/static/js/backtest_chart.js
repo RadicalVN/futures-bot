@@ -39,7 +39,7 @@ function _sliceByRange(arr, xMin, xMax) {
 }
 
 // ── Build datasets từ slice ───────────────────────────────────────────────────
-function _buildDatasets(slice, trades, slopeColor, MOM_COLOR, HIST_COLORS, slopeBarColor) {
+function _buildDatasets(slice, trades, slopeColor, MOM_COLOR, HIST_COLORS, slopeBarColor, adxThreshold = 25) {
   const smaBasisData  = slice.map(d => ({ x:d.x, y:d.sma_basis??null, momentum:d.sma_momentum, slope_pct:d.sma_slope_pct, momentum_pct:d.sma_momentum_pct }));
   const smaBasisDataN = slice.map(d => ({ x:d.x, y:d.sma_basis??null, momentum_n:d.sma_momentum_n, momentum_n_pct:d.sma_momentum_n_pct }));
   const smaBasisYArr  = slice.map(d => d.sma_basis);
@@ -54,6 +54,9 @@ function _buildDatasets(slice, trades, slopeColor, MOM_COLOR, HIST_COLORS, slope
   const macdSlopeData = slice.map(d => ({ x:d.x, y:d.macd_slope_pct??null }));
   const sigSlopeData  = slice.map(d => ({ x:d.x, y:d.macd_sig_slope_pct??null }));
   const sigAccelData  = slice.map(d => ({ x:d.x, y:d.macd_sig_momentum_pct??null, momentum:d.macd_sig_momentum }));
+  const adxData       = slice.map(d => ({ x:d.x, y:d.adx??null }));
+  const adxPlusDiData = slice.map(d => ({ x:d.x, y:d.adx_plus_di??null }));
+  const adxMinusDiData= slice.map(d => ({ x:d.x, y:d.adx_minus_di??null }));
 
   // Entry/Exit markers — chỉ lấy trades trong range
   const xMin = slice.length ? slice[0].x : 0;
@@ -88,6 +91,9 @@ function _buildDatasets(slice, trades, slopeColor, MOM_COLOR, HIST_COLORS, slope
     { type:'scatter', label:'Short Entry', data:shortEntries, backgroundColor:'#f6465d', borderColor:'#f6465d', pointStyle:'triangle', pointRadius:9, rotation:180, yAxisID:'y', order:-2 },
     { type:'scatter', label:'Exit Win',    data:exitWins,     backgroundColor:'rgba(14,203,129,0.9)', borderColor:'#0ecb81', pointStyle:'crossRot', pointRadius:8, borderWidth:2.5, yAxisID:'y', order:-2 },
     { type:'scatter', label:'Exit Loss',   data:exitLosses,   backgroundColor:'rgba(246,70,93,0.9)',  borderColor:'#f6465d', pointStyle:'crossRot', pointRadius:8, borderWidth:2.5, yAxisID:'y', order:-2 },
+    { type:'line', label:'ADX',  data:adxData,       spanGaps:true, segment:{borderColor:(ctx)=>{ const v=ctx.p1?.parsed?.y; return v==null?'#888':v>adxThreshold?'#2196F3':'#f6465d'; }}, borderWidth:2,   pointRadius:0, yAxisID:'y_adx' },
+    { type:'line', label:'+DI',  data:adxPlusDiData, spanGaps:true, borderColor:'#0ecb81', borderWidth:1.2, pointRadius:0, borderDash:[3,3], yAxisID:'y_adx' },
+    { type:'line', label:'-DI',  data:adxMinusDiData,spanGaps:true, borderColor:'#f6465d', borderWidth:1.2, pointRadius:0, borderDash:[3,3], yAxisID:'y_adx' },
   ];
 }
 
@@ -109,8 +115,9 @@ function _updateWindow(xMin, xMax) {
   const MOM_COLOR  = chart._btMomColor;
   const HIST_COLORS = chart._btHistColors;
   const slopeBarColor = chart._btSlopeBarColor;
+  const adxThreshold  = chart._btAdxThreshold ?? 25;
 
-  const newDatasets = _buildDatasets(slice, _btAllTrades, slopeColor, MOM_COLOR, HIST_COLORS, slopeBarColor);
+  const newDatasets = _buildDatasets(slice, _btAllTrades, slopeColor, MOM_COLOR, HIST_COLORS, slopeBarColor, adxThreshold);
 
   // Cập nhật data từng dataset (giữ nguyên hidden state)
   newDatasets.forEach((nd, i) => {
@@ -186,6 +193,7 @@ export async function renderBacktestChart(jobId) {
   _btAllTrades  = chartData.trades;
   if (!_btAllCandles?.length) return;
 
+  const _btAdxThreshold = chartData.adx_threshold ?? 25;
   _btTfMs = _guessTfMs(_btAllCandles);
 
   const container = document.getElementById('btChartContainer');
@@ -223,7 +231,7 @@ export async function renderBacktestChart(jobId) {
   const xMax   = lastTs + _btTfMs * 5;
   const xMin   = lastTs - _btTfMs * (_btDefaultCandles - 1);
   const initSlice = _sliceByRange(_btAllCandles, xMin, xMax);
-  const datasets  = _buildDatasets(initSlice, _btAllTrades, slopeColor, MOM_COLOR, HIST_COLORS, slopeBarColor);
+  const datasets  = _buildDatasets(initSlice, _btAllTrades, slopeColor, MOM_COLOR, HIST_COLORS, slopeBarColor, _btAdxThreshold);
 
   // ── Scales ────────────────────────────────────────────────────────────────
   const chartScales = {
@@ -233,6 +241,7 @@ export async function renderBacktestChart(jobId) {
     y_macd_slope: {type:'linear',display:true,position:'right',stack:'main',stackWeight:0.6,grid:{color:'rgba(0,0,0,0.08)',drawOnChartArea:true},ticks:{color:'#333',maxTicksLimit:3,callback:(v,i,t)=>i===t.length-1?'':v.toFixed(4)+'%'}},
     y_sig_slope:  {type:'linear',display:true,position:'left', stack:'main',stackWeight:0.6,grid:{drawOnChartArea:false},ticks:{color:'#2196F3',maxTicksLimit:3,callback:(v,i,t)=>i===t.length-1?'':v.toFixed(4)+'%'}},
     y_sma_slope:  {type:'linear',display:false,position:'left',stack:'main',stackWeight:3},
+    y_adx:        {type:'linear',display:true,position:'right',stack:'main',stackWeight:0.7,min:0,max:100,grid:{color:'rgba(0,0,0,0.08)',drawOnChartArea:true},ticks:{color:'#FF9800',maxTicksLimit:4,callback:(v,i,t)=>i===t.length-1?'':v.toFixed(0)}},
   };
 
   // ── Plugins ───────────────────────────────────────────────────────────────
@@ -292,6 +301,23 @@ export async function renderBacktestChart(jobId) {
         }
         c.restore();
       });
+      // ADX panel
+      const yAdx=chart.scales['y_adx'];
+      if(yAdx){
+        c.save();
+        c.fillStyle='rgba(0,0,0,0.12)';
+        c.fillRect(chart.chartArea.left,yAdx.top,chart.chartArea.right-chart.chartArea.left,yAdx.bottom-yAdx.top);
+        c.beginPath();c.moveTo(chart.chartArea.left,yAdx.top);c.lineTo(chart.chartArea.right,yAdx.top);
+        c.lineWidth=1;c.strokeStyle='#555';c.stroke();
+        const _thr=chart._btAdxThreshold??25;
+        const y25=yAdx.getPixelForValue(_thr);
+        if(!isNaN(y25)){
+          c.beginPath();c.setLineDash([4,4]);c.moveTo(chart.chartArea.left,y25);c.lineTo(chart.chartArea.right,y25);
+          c.lineWidth=1;c.strokeStyle='rgba(33,150,243,0.7)';c.stroke();c.setLineDash([]);
+          c.font='10px Inter,sans-serif';c.fillStyle='rgba(33,150,243,0.9)';c.fillText(_thr,chart.chartArea.right+2,y25+4);
+        }
+        c.restore();
+      }
     }
   };
 
@@ -347,6 +373,7 @@ export async function renderBacktestChart(jobId) {
     'MACD-Cross':'#FFEB3B','MACD Signal':'#FF9800','MACD-Signal-Cross':'#FF9800',
     'MACD Slope':'#2196F3','Signal Slope':'#2196F3','Signal Accel':'#9C27B0',
     'Long Entry':'#0ecb81','Short Entry':'#f6465d','Exit Win':'#0ecb81','Exit Loss':'#f6465d','Trade Lines':'#888',
+    'ADX':'#FF9800','+DI':'#0ecb81','-DI':'#f6465d',
   };
   function renderLegend() {
     const el=document.getElementById('btChartLegend');
@@ -433,6 +460,7 @@ export async function renderBacktestChart(jobId) {
   _btChartInstance._btMomColor     = MOM_COLOR;
   _btChartInstance._btHistColors   = HIST_COLORS;
   _btChartInstance._btSlopeBarColor = slopeBarColor;
+  _btChartInstance._btAdxThreshold  = _btAdxThreshold;
 
   setTimeout(renderLegend, 50);
   document.addEventListener('click', e=>{

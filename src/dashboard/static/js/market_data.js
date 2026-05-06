@@ -162,6 +162,70 @@ function _pollRowJob(rk, jobKey, bar, msg, progressDiv) {
   }, 1500);
 }
 
+// ── Manual refresh (kéo data thủ công cho bất kỳ strategy/symbol/tf) ─────────
+
+export async function mdManualRefresh(fullRefresh) {
+  const strategy = document.getElementById('mdManualStrategy')?.value;
+  const symbol   = (document.getElementById('mdManualSymbol')?.value || '').trim().toUpperCase();
+  const tf       = document.getElementById('mdManualTimeframe')?.value;
+
+  if (!strategy || !symbol || !tf) {
+    alert('Vui lòng điền đầy đủ Chiến lược, Cặp tiền và Timeframe.');
+    return;
+  }
+
+  const progressDiv = document.getElementById('mdManualProgress');
+  const bar         = document.getElementById('mdManualBar');
+  const msg         = document.getElementById('mdManualMsg');
+
+  if (progressDiv) progressDiv.style.display = 'block';
+  if (bar) { bar.style.width = '0%'; bar.style.background = 'var(--accent)'; }
+  if (msg) msg.textContent = 'Đang khởi động...';
+
+  try {
+    const res = await fetch(`${MD_API}/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        strategy_name: strategy,
+        symbol,
+        timeframe: tf,
+        full_refresh: fullRefresh,
+      }),
+    });
+    const data = await res.json();
+    const jobKey = data.job_key;
+
+    // Poll tiến độ
+    const timer = setInterval(async () => {
+      try {
+        const r = await fetch(`${MD_API}/refresh/${encodeURIComponent(jobKey)}`);
+        if (!r.ok) { clearInterval(timer); return; }
+        const job = await r.json();
+
+        const pct = job.progress || 0;
+        if (bar) bar.style.width = `${pct}%`;
+        if (msg) msg.textContent = job.message || '';
+
+        if (job.status === 'done' || job.status === 'error') {
+          clearInterval(timer);
+          if (job.status === 'done') {
+            if (bar) bar.style.background = '#0ecb81';
+            if (msg) msg.textContent = `✓ Hoàn tất: ${job.result?.total_inserted ?? 0} nến mới`;
+            setTimeout(() => mdRefreshStatus(), 1500);
+          } else {
+            if (bar) bar.style.background = '#f6465d';
+            if (msg) msg.textContent = `✗ Lỗi: ${job.error}`;
+          }
+        }
+      } catch (e) { clearInterval(timer); }
+    }, 1500);
+
+  } catch (e) {
+    if (msg) msg.textContent = `Lỗi: ${e.message}`;
+  }
+}
+
 // ── Refresh All ───────────────────────────────────────────────────────────────
 
 export async function mdRefreshAll(fullRefresh) {

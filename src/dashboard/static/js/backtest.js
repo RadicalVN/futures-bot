@@ -623,6 +623,8 @@ export function onStrategyChange() {
   document.getElementById('btSV2Params').style.display = (v === 'sma_macd_cross_v2' || v === 'sma_macd_cross_v3') ? 'block' : 'none';
   document.getElementById('btSV3Params').style.display = (v === 'sma_macd_cross_v3') ? 'block' : 'none';
   document.getElementById('btSV4Params').style.display = (v === 'sma_macd_cross_v4' || v === 'sma_macd_cross_v5') ? 'block' : 'none';
+  document.getElementById('btSV6Params').style.display = (v === 'sma_macd_cross_v6') ? 'block' : 'none';
+  document.getElementById('btSV7Params').style.display = (v === 'sma_macd_cross_v7') ? 'block' : 'none';
   document.getElementById('btSAdtsParams').style.display = (v === 'adts') ? 'block' : 'none';
   // bb_length field: hide for ADTS (uses its own bbwidth_sma_period)
   const bbLenGroup = document.getElementById('btSBbLengthGroup');
@@ -675,6 +677,22 @@ export async function runStrategyBacktest(e) {
   if (notional) payload.notional_usdt  = parseFloat(notional);
   if (sl)       payload.stop_loss_pct  = parseFloat(sl);
   if (tp)       payload.take_profit_pct = parseFloat(tp);
+
+  // V6 params
+  const adxEntryThr = document.getElementById('btSAdxEntryThreshold')?.value;
+  const adxExitThr  = document.getElementById('btSAdxExitThreshold')?.value;
+  const levV6       = document.getElementById('btSLeverageV6')?.value;
+  if (adxEntryThr) payload.adx_entry_threshold = parseFloat(adxEntryThr);
+  if (adxExitThr)  payload.adx_exit_threshold  = parseFloat(adxExitThr);
+  if (levV6)       payload.leverage_v4         = parseInt(levV6);
+
+  // V7 params
+  const bbPeriod = document.getElementById('btSBbPeriod')?.value;
+  const bbMult   = document.getElementById('btSBbMult')?.value;
+  const levV7    = document.getElementById('btSLeverageV7')?.value;
+  if (bbPeriod) payload.bb_period  = parseInt(bbPeriod);
+  if (bbMult)   payload.bb_mult    = parseFloat(bbMult);
+  if (levV7)    payload.leverage_v4 = parseInt(levV7);
 
   // ADTS params
   const adxThr   = document.getElementById('btSAdxThreshold')?.value;

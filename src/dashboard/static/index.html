@@ -410,6 +410,8 @@
                 <option value="sma_macd_cross_v3">V3 — V2 + MA Distance + Min Hold (bb=200)</option>
                 <option value="sma_macd_cross_v4">V4 — V1 + SL/TP % (bb=200)</option>
                 <option value="sma_macd_cross_v5">V5 — V4 + Bộ lọc hướng MA200</option>
+                <option value="sma_macd_cross_v6">V6 — V1 + ADX Filter (ADX &gt; ngưỡng)</option>
+                <option value="sma_macd_cross_v7">V7 — V1 + Signal&gt;0/&lt;0 + BB Exit</option>
                 <option value="adts">ADTS — Adaptive Dynamic Trend &amp; Shield</option>
               </select>            </div>
             <div class="form-group">
@@ -496,6 +498,38 @@
               <div class="form-group">
                 <label>% Chốt lời (TP) <span style="color:var(--text-secondary); font-size:12px;">(mặc định 3%)</span>:</label>
                 <input type="number" id="btSTp" class="form-control" min="0.1" max="100" step="0.1" placeholder="3">
+              </div>
+            </div>
+
+            <!-- V6 params -->
+            <div id="btSV6Params" style="display:none;">
+              <div class="form-group">
+                <label>Ngưỡng ADX vào lệnh <span style="color:var(--text-secondary); font-size:12px;">(env ADX_ENTRY_THRESHOLD, mặc định 25)</span>:</label>
+                <input type="number" id="btSAdxEntryThreshold" class="form-control" min="1" max="100" step="0.5" placeholder="25">
+              </div>
+              <div class="form-group">
+                <label>Ngưỡng ADX đóng lệnh <span style="color:var(--text-secondary); font-size:12px;">(env ADX_EXIT_THRESHOLD, mặc định 25)</span>:</label>
+                <input type="number" id="btSAdxExitThreshold" class="form-control" min="1" max="100" step="0.5" placeholder="25">
+              </div>
+              <div class="form-group">
+                <label>Đòn bẩy <span style="color:var(--text-secondary); font-size:12px;">(mặc định x5)</span>:</label>
+                <input type="number" id="btSLeverageV6" class="form-control" min="1" max="125" step="1" placeholder="5">
+              </div>
+            </div>
+
+            <!-- V7 params -->
+            <div id="btSV7Params" style="display:none;">
+              <div class="form-group">
+                <label>BB Period <span style="color:var(--text-secondary); font-size:12px;">(mặc định 20)</span>:</label>
+                <input type="number" id="btSBbPeriod" class="form-control" min="2" max="500" step="1" placeholder="20">
+              </div>
+              <div class="form-group">
+                <label>BB Multiplier <span style="color:var(--text-secondary); font-size:12px;">(mặc định 2.0)</span>:</label>
+                <input type="number" id="btSBbMult" class="form-control" min="0.1" max="10" step="0.1" placeholder="2.0">
+              </div>
+              <div class="form-group">
+                <label>Đòn bẩy <span style="color:var(--text-secondary); font-size:12px;">(mặc định x5)</span>:</label>
+                <input type="number" id="btSLeverageV7" class="form-control" min="1" max="125" step="1" placeholder="5">
               </div>
             </div>
 
@@ -760,6 +794,53 @@
         <button class="btn btn-primary" onclick="mdRefreshStatus()" style="padding:8px 18px;">🔄 Làm mới trạng thái</button>
         <button class="btn" onclick="mdRefreshAll(false)" style="padding:8px 18px; background:#1a6b3a; color:#fff; border:none; border-radius:6px; cursor:pointer;">⬆️ Cập nhật tất cả (Incremental)</button>
         <button class="btn" onclick="mdRefreshAll(true)" style="padding:8px 18px; background:#7a1a1a; color:#fff; border:none; border-radius:6px; cursor:pointer;">🔁 Kéo lại tất cả (Full Refresh)</button>
+      </div>
+
+      <!-- Kéo data thủ công cho chiến lược bất kỳ (không cần bot) -->
+      <div style="background:var(--bg-panel); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:20px;">
+        <div style="font-weight:600; margin-bottom:12px; color:var(--text-primary);">📥 Kéo data thủ công</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div>
+            <label style="font-size:12px; color:var(--text-secondary); display:block; margin-bottom:4px;">Chiến lược</label>
+            <select id="mdManualStrategy" class="form-control" style="min-width:220px;">
+              <option value="sma_macd_cross">sma_macd_cross (V1)</option>
+              <option value="sma_macd_cross_v2">sma_macd_cross_v2 (V2)</option>
+              <option value="sma_macd_cross_v3">sma_macd_cross_v3 (V3)</option>
+              <option value="sma_macd_cross_v4">sma_macd_cross_v4 (V4)</option>
+              <option value="sma_macd_cross_v5">sma_macd_cross_v5 (V5)</option>
+              <option value="sma_macd_cross_v6" selected>sma_macd_cross_v6 (V6)</option>
+              <option value="sma_macd_cross_v7">sma_macd_cross_v7 (V7)</option>
+              <option value="adts">adts (ADTS)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px; color:var(--text-secondary); display:block; margin-bottom:4px;">Cặp tiền</label>
+            <input type="text" id="mdManualSymbol" class="form-control" placeholder="BTCUSDT" value="BTCUSDT" style="width:130px; text-transform:uppercase;">
+          </div>
+          <div>
+            <label style="font-size:12px; color:var(--text-secondary); display:block; margin-bottom:4px;">Timeframe</label>
+            <select id="mdManualTimeframe" class="form-control" style="width:90px;">
+              <option value="1m">1m</option>
+              <option value="3m">3m</option>
+              <option value="5m" selected>5m</option>
+              <option value="15m">15m</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h</option>
+              <option value="4h">4h</option>
+              <option value="1d">1d</option>
+            </select>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button onclick="mdManualRefresh(false)" style="padding:8px 16px; background:#1a6b3a; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px;">⬆ Update</button>
+            <button onclick="mdManualRefresh(true)" style="padding:8px 16px; background:#7a1a1a; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px;">🔁 Full Refresh</button>
+          </div>
+        </div>
+        <div id="mdManualProgress" style="display:none; margin-top:12px;">
+          <div style="background:var(--border); border-radius:3px; height:6px; overflow:hidden; margin-bottom:6px;">
+            <div id="mdManualBar" style="height:100%; background:var(--accent); width:0%; transition:width 0.3s;"></div>
+          </div>
+          <div id="mdManualMsg" style="font-size:12px; color:var(--text-secondary);"></div>
+        </div>
       </div>
 
       <!-- Global job progress -->

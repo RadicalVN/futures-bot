@@ -22,6 +22,8 @@ from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
 from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
 from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
 from src.strategies.sma_macd_cross_v5 import SmaMacdCrossV5Strategy
+from src.strategies.sma_macd_cross_v6 import SmaMacdCrossV6Strategy
+from src.strategies.sma_macd_cross_v7 import SmaMacdCrossV7Strategy
 from src.strategies.adts import ADTSStrategy
 from src.strategies.adts.models import ADTSConfig
 from src.strategies.adts.scanner import run_calibration, _calculate_atr, _calculate_bbwidth
@@ -83,6 +85,12 @@ class StrategyBacktestRequest(BaseModel):
     adts_emergency_adx_threshold: Optional[float] = None
     adts_leverage: Optional[int] = None
     adts_min_notional: Optional[float] = None   # USDT notional tối thiểu sau partial close
+    # V6 params
+    adx_entry_threshold: Optional[float] = None  # Ngưỡng ADX vào lệnh (env ADX_ENTRY_THRESHOLD, mặc định 25)
+    adx_exit_threshold:  Optional[float] = None  # Ngưỡng ADX đóng lệnh (env ADX_EXIT_THRESHOLD, mặc định 25)
+    # V7 params
+    bb_period: Optional[int]   = None   # Chu kỳ Bollinger Bands (mặc định 20)
+    bb_mult:   Optional[float] = None   # Hệ số std BB (mặc định 2.0)
     # Phí giao dịch & trượt giá (áp dụng cho mọi chiến lược)
     commission_pct: Optional[float] = None   # % hoa hồng mỗi lần khớp lệnh (mặc định 0.05%)
     slippage_pct: Optional[float] = None     # % trượt giá mỗi lần khớp lệnh (mặc định 0.0%)
@@ -119,6 +127,10 @@ def _build_strategy(strategy_name, parameters):
         return SmaMacdCrossV4Strategy(parameters)
     elif strategy_name == "sma_macd_cross_v5":
         return SmaMacdCrossV5Strategy(parameters)
+    elif strategy_name == "sma_macd_cross_v6":
+        return SmaMacdCrossV6Strategy(parameters)
+    elif strategy_name == "sma_macd_cross_v7":
+        return SmaMacdCrossV7Strategy(parameters)
     elif strategy_name == "adts":
         return ADTSStrategy(parameters)
     else:
@@ -135,6 +147,15 @@ def _get_lookback(strategy_name, parameters):
                            "sma_macd_cross_v4", "sma_macd_cross_v5"):
         signal_len = int(parameters.get("macd_signal_length", 500))
         return max(base, signal_len * 3)
+    elif strategy_name == "sma_macd_cross_v7":
+        signal_len = int(parameters.get("macd_signal_length", 500))
+        bb_period  = int(parameters.get("bb_period", 20))
+        return max(base, signal_len * 3, bb_period)
+    elif strategy_name == "sma_macd_cross_v6":
+        signal_len = int(parameters.get("macd_signal_length", 500))
+        adx_period = int(parameters.get("adx_period", int(float(os.environ.get("ADX_PERIOD", 14)))))
+        adx_warmup = adx_period * 7
+        return max(base, signal_len * 3, adx_warmup)
     elif strategy_name == "custom_macd":
         signal_len = int(parameters.get("signal_length", 500))
         return max(base, signal_len * 3)
@@ -216,7 +237,7 @@ def _precompute_sma_macd(df, parameters):
     Nhanh hơn ~100x so với tính lại mỗi nến.
     """
     import pandas as pd
-    from src.data.indicators import add_custom_sma_to_df, add_custom_macd_to_df
+    from src.data.indicators import add_custom_sma_to_df, add_custom_macd_to_df, add_adx_to_df
     from src.strategies.sma_macd_cross import _slope_color, _find_signal_phase_start, SIG_BULLISH, SIG_BEARISH
 
     df = add_custom_sma_to_df(
@@ -235,6 +256,7 @@ def _precompute_sma_macd(df, parameters):
         src=parameters.get("macd_src", "EMA"),
         sig_type=parameters.get("macd_sig_type", "EMA"),
     )
+    df = add_adx_to_df(df, period=parameters.get("adx_period", int(float(os.environ.get("ADX_PERIOD", 14)))))
 
     # Pre-compute màu slope cho từng nến
     ma_arr   = df["custom_sma_basis"].to_numpy()
@@ -316,6 +338,14 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     # V4 params
     stop_loss_pct   = float(parameters.get("stop_loss_pct", 0.0))
     take_profit_pct = float(parameters.get("take_profit_pct", 0.0))
+    # V6 params — tách biệt entry / exit threshold
+    import os as _os
+    _adx_period_default    = int(float(_os.environ.get("ADX_PERIOD", 14)))
+    _adx_entry_default     = float(_os.environ.get("ADX_ENTRY_THRESHOLD", 25.0))
+    _adx_exit_default      = float(_os.environ.get("ADX_EXIT_THRESHOLD",  25.0))
+    adx_entry_threshold    = float(parameters.get("adx_entry_threshold", _adx_entry_default))
+    adx_exit_threshold     = float(parameters.get("adx_exit_threshold",  _adx_exit_default))
+    adx_curr               = float(row.get("adx", 0) or 0)
 
     # Tính số nến đã giữ lệnh (cho V3 min_hold)
     candles_held = 0
@@ -351,9 +381,18 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                     return {"type": "close_long", "price": tp_exit, "reason": f"TP: high={high_curr:.4f}>=TP={tp:.4f} (+{take_profit_pct}%=${notional*take_profit_pct/100:.2f})"}
                 return {"type": "none", "price": close_curr}
 
-            # V1/V2/V3: TH2/TH1
+            # V6: kiểm tra ADX trước khi xét TH1/TH2
+            if strategy_name == "sma_macd_cross_v6" and adx_curr <= adx_exit_threshold:
+                return {"type": "none", "price": close_curr,
+                        "reason": f"Giữ LONG: ADX={adx_curr:.2f}≤{adx_exit_threshold}"}
+
+            # V1/V2/V3/V6: TH2/TH1
             if sig_color in SIG_BEARISH:
-                return {"type": "close_long", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
+                # V6 TH2: thêm điều kiện close < ma_curr
+                if strategy_name == "sma_macd_cross_v6" and close_curr >= ma_curr:
+                    pass  # giá chưa dưới MA → chưa đóng TH2
+                else:
+                    return {"type": "close_long", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if close_curr < ma_curr:
                 if candles_held >= min_hold_candles:
                     threshold = pos_ma_cross + pos_dev
@@ -375,9 +414,18 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                     return {"type": "close_short", "price": tp_exit, "reason": f"TP: low={low_curr:.4f}<=TP={tp:.4f} (+{take_profit_pct}%=${notional*take_profit_pct/100:.2f})"}
                 return {"type": "none", "price": close_curr}
 
-            # V1/V2/V3: TH2/TH1
+            # V6: kiểm tra ADX trước khi xét TH1/TH2
+            if strategy_name == "sma_macd_cross_v6" and adx_curr <= adx_exit_threshold:
+                return {"type": "none", "price": close_curr,
+                        "reason": f"Giữ SHORT: ADX={adx_curr:.2f}≤{adx_exit_threshold}"}
+
+            # V1/V2/V3/V6: TH2/TH1
             if sig_color in SIG_BULLISH:
-                return {"type": "close_short", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
+                # V6 TH2: thêm điều kiện close > ma_curr
+                if strategy_name == "sma_macd_cross_v6" and close_curr <= ma_curr:
+                    pass  # giá chưa trên MA → chưa đóng TH2
+                else:
+                    return {"type": "close_short", "price": close_curr, "reason": f"TH2: Signal {sig_color}"}
             if close_curr > ma_curr:
                 if candles_held >= min_hold_candles:
                     threshold = pos_ma_cross + pos_dev
@@ -400,8 +448,10 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     # V5: MA200 phai di ngang hoac doc len
     ma_long_ok  = {"blue", "green", "yellow"}
     cond6_long  = (strategy_name != "sma_macd_cross_v5") or (ma_color in ma_long_ok)
+    # V6: ADX > entry threshold
+    cond7_long  = (strategy_name != "sma_macd_cross_v6") or (adx_curr > adx_entry_threshold)
 
-    if cond1_long and cond2_long and cond3_long and cond4_long and cond5_long and cond6_long:
+    if cond1_long and cond2_long and cond3_long and cond4_long and cond5_long and cond6_long and cond7_long:
         # One-shot check
         if "long" in last_entry_phase and last_entry_phase["long"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
@@ -431,8 +481,10 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
     # V5: MA200 phai di ngang hoac doc xuong
     ma_short_ok  = {"red", "orange", "yellow"}
     cond6_short  = (strategy_name != "sma_macd_cross_v5") or (ma_color in ma_short_ok)
+    # V6: ADX > entry threshold
+    cond7_short  = (strategy_name != "sma_macd_cross_v6") or (adx_curr > adx_entry_threshold)
 
-    if cond1_short and cond2_short and cond3_short and cond4_short and cond5_short and cond6_short:
+    if cond1_short and cond2_short and cond3_short and cond4_short and cond5_short and cond6_short and cond7_short:
         # One-shot check
         if "short" in last_entry_phase and last_entry_phase["short"] == sig_phase_start_ts:
             return {"type": "none", "price": close_curr}
@@ -451,6 +503,150 @@ def _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters
                 "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
                 "ma": round(ma_curr, 6), "close": round(close_curr, 6),
             }
+        }
+
+    return {"type": "none", "price": close_curr}
+
+
+# ── Simulator for sma_macd_cross_v7 ─────────────────────────────────────────
+
+def _simulate_sma_macd_v7_candle(df, i, open_position, last_entry_phase, parameters):
+    """
+    Simulate 1 nến cho sma_macd_cross_v7 dùng pre-computed indicators.
+
+    Thay đổi so với V1:
+    - Entry cond1: sig_curr > 0 (LONG) / sig_curr < 0 (SHORT)
+    - Exit: chỉ TH1, không có TH2
+    - TH1 LONG : close < MA AND close < threshold AND close > bb_upper
+    - TH1 SHORT: close > MA AND close > threshold AND close < bb_lower
+    """
+    from src.strategies.sma_macd_cross import SIG_BULLISH, SIG_BEARISH
+
+    row        = df.iloc[i]
+    close_curr = float(row["close"])
+    close_prev = float(df["close"].iloc[i - 1])
+    high_curr  = float(row["high"])
+    low_curr   = float(row["low"])
+
+    ma_curr    = float(row["custom_sma_basis"])
+    ma_prev    = float(df["custom_sma_basis"].iloc[i - 1])
+    macd_curr  = float(row["custom_macd"])
+    sig_curr   = float(row["custom_macd_signal"])
+
+    ma_color   = row["_ma_color"]
+    sig_color  = row["_sig_color"]
+    macd_color = row["_macd_color"]
+
+    phase_start_idx    = int(row["_sig_phase_start_idx"])
+    sig_phase_start_ts = int(df["timestamp"].iloc[phase_start_idx])
+
+    bb_upper = float(row.get("bb_upper", float("nan")))
+    bb_lower = float(row.get("bb_lower", float("nan")))
+
+    import math
+    bb_valid = not (math.isnan(bb_upper) or math.isnan(bb_lower))
+
+    # TVT-MA color: dung custom_sma_momentum (tinh stateful, nhat quan voi bieu do)
+    # Khac voi _ma_color (tinh tu _slope_color, phu thuoc so nen load)
+    tvt_ma_color = str(row.get("custom_sma_momentum", "yellow") or "yellow")
+
+    # ── EXIT ──────────────────────────────────────────────────────────────────
+    if open_position:
+        side         = open_position["side"]
+        pos_ma_cross = float((open_position.get("metadata") or {}).get("ma_cross_price", open_position["entry_price"]))
+        pos_dev      = float((open_position.get("metadata") or {}).get("entry_deviation", 0))
+
+        if side == "long":
+            # TH1: close < MA AND close < threshold AND close > bb_upper
+            #      AND sig_color in SIG_BEARISH
+            if close_curr < ma_curr and bb_valid:
+                threshold = pos_ma_cross + pos_dev
+                if (close_curr < threshold
+                        and close_curr > bb_upper
+                        and sig_color in SIG_BEARISH):
+                    exit_price = (low_curr + ma_curr) / 2
+                    return {
+                        "type": "close_long", "price": exit_price,
+                        "reason": (
+                            f"TH1: close<MA, <thr, >BB_Upper={bb_upper:.4f}"
+                            f", Signal={sig_color}(bearish)"
+                        ),
+                    }
+
+        elif side == "short":
+            # TH1: close > MA AND close > threshold AND close < bb_lower
+            #      AND sig_color in SIG_BULLISH
+            if close_curr > ma_curr and bb_valid:
+                threshold = pos_ma_cross + pos_dev
+                if (close_curr > threshold
+                        and close_curr < bb_lower
+                        and sig_color in SIG_BULLISH):
+                    exit_price = (high_curr + ma_curr) / 2
+                    return {
+                        "type": "close_short", "price": exit_price,
+                        "reason": (
+                            f"TH1: close>MA, >thr, <BB_Lower={bb_lower:.4f}"
+                            f", Signal={sig_color}(bullish)"
+                        ),
+                    }
+
+        return {"type": "none", "price": close_curr}
+
+    # ── ENTRY ─────────────────────────────────────────────────────────────────
+    # LONG: Signal > 0, MACD >= Signal, giá cắt lên MA, TVT-SMA xanh
+    cond1_long = sig_curr > 0
+    cond2_long = macd_curr >= sig_curr
+    cond3_long = (close_prev <= ma_prev) and (close_curr > ma_curr)
+    cond4_long = tvt_ma_color in {"blue", "green"}  # TVT-MA xanh (stateful, nhat quan voi bieu do)
+
+    if cond1_long and cond2_long and cond3_long and cond4_long:
+        if "long" in last_entry_phase and last_entry_phase["long"] == sig_phase_start_ts:
+            return {"type": "none", "price": close_curr}
+        ma_cross    = ma_curr
+        entry_price = (high_curr + ma_cross) / 2
+        deviation   = abs(entry_price - ma_cross)
+        curr_ts     = int(df["timestamp"].iloc[i])
+        return {
+            "type": "long", "price": entry_price,
+            "metadata": {
+                "entry_price":       round(entry_price, 6),
+                "ma_cross_price":    round(ma_cross, 6),
+                "entry_deviation":   round(deviation, 6),
+                "entry_candle_ts":   curr_ts,
+                "sig_phase_start_ts": sig_phase_start_ts,
+                "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
+                "ma": round(ma_curr, 6), "close": round(close_curr, 6),
+                "bb_upper": round(bb_upper, 6) if bb_valid else None,
+                "bb_lower": round(bb_lower, 6) if bb_valid else None,
+            },
+        }
+
+    # SHORT: Signal < 0, MACD <= Signal, giá cắt xuống MA, TVT-SMA đỏ/cam
+    cond1_short = sig_curr < 0
+    cond2_short = macd_curr <= sig_curr
+    cond3_short = (close_prev >= ma_prev) and (close_curr < ma_curr)
+    cond4_short = tvt_ma_color in {"red", "orange"}  # TVT-MA do/cam (stateful, nhat quan voi bieu do)
+
+    if cond1_short and cond2_short and cond3_short and cond4_short:
+        if "short" in last_entry_phase and last_entry_phase["short"] == sig_phase_start_ts:
+            return {"type": "none", "price": close_curr}
+        ma_cross    = ma_curr
+        entry_price = (low_curr + ma_cross) / 2
+        deviation   = abs(entry_price - ma_cross)
+        curr_ts     = int(df["timestamp"].iloc[i])
+        return {
+            "type": "short", "price": entry_price,
+            "metadata": {
+                "entry_price":       round(entry_price, 6),
+                "ma_cross_price":    round(ma_cross, 6),
+                "entry_deviation":   round(deviation, 6),
+                "entry_candle_ts":   curr_ts,
+                "sig_phase_start_ts": sig_phase_start_ts,
+                "ma_color": ma_color, "sig_color": sig_color, "macd_color": macd_color,
+                "ma": round(ma_curr, 6), "close": round(close_curr, 6),
+                "bb_upper": round(bb_upper, 6) if bb_valid else None,
+                "bb_lower": round(bb_lower, 6) if bb_valid else None,
+            },
         }
 
     return {"type": "none", "price": close_curr}
@@ -1129,8 +1325,44 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
     if strategy_name == "sma_macd_cross":
         df = _precompute_sma_macd(df, parameters)
-    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5"):
+    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5", "sma_macd_cross_v6"):
         df = _precompute_sma_macd(df, parameters)
+
+        # ── V6: kiểm tra ADX đã hội tụ tại điểm bắt đầu simulate ────────────
+        if strategy_name == "sma_macd_cross_v6":
+            adx_period = int(parameters.get("adx_period", int(float(os.environ.get("ADX_PERIOD", 14)))))
+            adx_warmup_needed = adx_period * 2  # seed point của Wilder smoothing
+            # Tìm start_idx (nến đầu tiên >= start_ms) để kiểm tra
+            ts_arr_check = df["timestamp"].to_numpy()
+            start_idx_check = next(
+                (idx for idx, t in enumerate(ts_arr_check) if int(t) >= start_ms),
+                len(ts_arr_check)
+            )
+            if start_idx_check < adx_warmup_needed:
+                raise ValueError(
+                    f"❌ Không đủ warmup để tính ADX({adx_period}) cho V6.\n"
+                    f"Cần ít nhất {adx_warmup_needed} nến warmup trước ngày bắt đầu, "
+                    f"nhưng chỉ có {start_idx_check} nến.\n"
+                    f"→ Chạy 'Full Refresh' trong tab Market Data để có đủ 5 năm data."
+                )
+            # Kiểm tra giá trị ADX tại start_idx có hợp lệ không (> 0)
+            adx_at_start = float(df["adx"].iloc[start_idx_check])
+            if adx_at_start == 0.0:
+                raise ValueError(
+                    f"❌ ADX({adx_period}) chưa hội tụ tại điểm bắt đầu backtest.\n"
+                    f"ADX = 0 tại nến đầu tiên của khoảng backtest (index={start_idx_check}).\n"
+                    f"Cần thêm warmup: tăng lookback hoặc chọn ngày bắt đầu muộn hơn.\n"
+                    f"→ Chạy 'Full Refresh' trong tab Market Data để có đủ 5 năm data."
+                )
+    elif strategy_name == "sma_macd_cross_v7":
+        # V7 = V1 + BB — precompute SMA+MACD rồi thêm BB
+        df = _precompute_sma_macd(df, parameters)
+        from src.data.indicators import add_bb_to_df as _add_bb
+        df = _add_bb(
+            df,
+            period=parameters.get("bb_period", 20),
+            mult=float(parameters.get("bb_mult", 2.0)),
+        )
     elif strategy_name == "adts":
         _update_progress(20, "Đang kiểm tra dữ liệu D1 cho ADTS calibration...")
         # ADTS cần thêm D1 data cho daily calibration
@@ -1264,7 +1496,10 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
         dense_equity.append({"ts": ts_ms, "equity": equity_now})
 
         # ── Lấy signal ────────────────────────────────────────────────────────
-        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5") and i >= 2:
+        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5", "sma_macd_cross_v6") and i >= 2:
+            sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters, strategy_name)
+        elif strategy_name == "sma_macd_cross_v7" and i >= 2:
+            sig = _simulate_sma_macd_v7_candle(df, i, open_position, last_entry_phase, parameters)
             sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters, strategy_name)
         elif strategy_name == "adts" and i >= 2:
             sig = _simulate_adts_candle(df, i, open_position, parameters)
@@ -1632,6 +1867,10 @@ def _build_chart_data(df, all_candles: list, trades: list, strategy_name: str,
             "macd_sig_slope_pct":   _safe(row.get("custom_macd_sig_slope_pct")),
             "macd_momentum_pct":    _safe(row.get("custom_macd_momentum_pct")),
             "macd_sig_momentum_pct": _safe(row.get("custom_macd_sig_momentum_pct")),
+            # ADX
+            "adx":          _safe(row.get("adx"),          4),
+            "adx_plus_di":  _safe(row.get("adx_plus_di"),  4),
+            "adx_minus_di": _safe(row.get("adx_minus_di"), 4),
         })
 
     # Trades: entry/exit markers
@@ -1655,6 +1894,7 @@ def _build_chart_data(df, all_candles: list, trades: list, strategy_name: str,
         "strategy_name": strategy_name,
         "candles":  candles_out,
         "trades":   trades_out,
+        "adx_threshold": float(os.environ.get("ADX_ENTRY_THRESHOLD", 25.0)),
     }
 
 
@@ -2145,6 +2385,8 @@ async def run_strategy_backtest(req: StrategyBacktestRequest):
         "sma_macd_cross_v3": {"bb_length": 200, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "use_trend_filter": True, "min_ma_distance_pct": 0.1, "min_hold_candles": 3, "commission_pct": 0.0005, "slippage_pct": 0.0},
         "sma_macd_cross_v4": {"bb_length": 200, "timeframe": "5m", "leverage_v4": 10, "notional_usdt": 2000.0, "stop_loss_pct": 3.0, "take_profit_pct": 3.0, "commission_pct": 0.0005, "slippage_pct": 0.0},
         "sma_macd_cross_v5": {"bb_length": 200, "timeframe": "5m", "leverage_v4": 10, "notional_usdt": 2000.0, "stop_loss_pct": 3.0, "take_profit_pct": 3.0, "commission_pct": 0.0005, "slippage_pct": 0.0},
+        "sma_macd_cross_v6": {"bb_length": 200, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "adx_period": int(float(os.environ.get("ADX_PERIOD", 14))), "commission_pct": 0.0005, "slippage_pct": 0.0},
+        "sma_macd_cross_v7": {"bb_length": 200, "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1, "bb_period": 20, "bb_mult": 2.0, "commission_pct": 0.0005, "slippage_pct": 0.0},
         "adts": {
             "timeframe": "5m", "leverage": 5, "position_size_pct": 0.1,
             "atr_period": 14, "adx_period": 14, "ema_period": 20,
@@ -2197,6 +2439,12 @@ async def run_strategy_backtest(req: StrategyBacktestRequest):
     if req.adts_emergency_adx_threshold is not None:  params["emergency_adx_threshold"] = req.adts_emergency_adx_threshold
     if req.adts_leverage is not None:                 params["leverage"] = req.adts_leverage
     if req.adts_min_notional is not None:             params["min_notional"] = req.adts_min_notional
+    # V6 params
+    if req.adx_entry_threshold is not None: params["adx_entry_threshold"] = req.adx_entry_threshold
+    if req.adx_exit_threshold  is not None: params["adx_exit_threshold"]  = req.adx_exit_threshold
+    # V7 params
+    if req.bb_period is not None: params["bb_period"] = req.bb_period
+    if req.bb_mult   is not None: params["bb_mult"]   = req.bb_mult
     # Phí giao dịch & trượt giá (áp dụng cho mọi chiến lược)
     if req.commission_pct is not None: params["commission_pct"] = req.commission_pct
     if req.slippage_pct is not None:   params["slippage_pct"]   = req.slippage_pct

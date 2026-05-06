@@ -6,7 +6,7 @@ import { renderSignalsManagement, addSignal, removeSignal, filterAvailableSignal
 import { renderIndicatorsManagement, toggleIndicator } from './indicators.js';
 import { loadTradesPage, applyTradeFilters, resetTradeFilters } from './trades.js';
 import { loadBacktestPage, runBacktest, filterBtTrades, switchBtTab, onStrategyChange, runStrategyBacktest } from './backtest.js';
-import { loadMarketDataPage, mdRefreshStatus, mdRefreshAll, mdRefreshOne, mdLoadJobs, mdShowJobDetail, mdRetryJob } from './market_data.js';
+import { loadMarketDataPage, mdRefreshStatus, mdRefreshAll, mdRefreshOne, mdLoadJobs, mdShowJobDetail, mdRetryJob, mdManualRefresh } from './market_data.js';
 import { scrollChartToTrade as _scrollChartToTrade } from './backtest_chart.js';
 
 // Expose handlers to window for HTML onclick attributes
@@ -43,12 +43,13 @@ window.onStrategyChange = onStrategyChange;
 window.runStrategyBacktest = runStrategyBacktest;
 
 // Market Data
-window.mdRefreshStatus = mdRefreshStatus;
-window.mdRefreshAll    = mdRefreshAll;
-window.mdRefreshOne    = mdRefreshOne;
-window.mdLoadJobs      = mdLoadJobs;
-window.mdShowJobDetail = mdShowJobDetail;
-window.mdRetryJob      = mdRetryJob;
+window.mdRefreshStatus  = mdRefreshStatus;
+window.mdRefreshAll     = mdRefreshAll;
+window.mdRefreshOne     = mdRefreshOne;
+window.mdLoadJobs       = mdLoadJobs;
+window.mdShowJobDetail  = mdShowJobDetail;
+window.mdRetryJob       = mdRetryJob;
+window.mdManualRefresh  = mdManualRefresh;
 
 // Backtest chart helpers
 window.btResetZoom = function() {

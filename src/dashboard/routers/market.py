@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+import os
 import pandas as pd
 from loguru import logger
 
@@ -60,10 +61,11 @@ async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000,
         await exchange.close()
 
         formatted_data = []
-        from src.data.indicators import ohlcv_to_dataframe, add_custom_sma_to_df, add_custom_macd_to_df
+        from src.data.indicators import ohlcv_to_dataframe, add_custom_sma_to_df, add_custom_macd_to_df, add_adx_to_df
         df = ohlcv_to_dataframe(ohlcv)
         df = add_custom_sma_to_df(df)
         df = add_custom_macd_to_df(df)
+        df = add_adx_to_df(df, period=int(float(os.environ.get("ADX_PERIOD", 14))))
 
         # Nan to None for JSON
         df = df.where(pd.notnull(df), None)
@@ -94,8 +96,12 @@ async def get_chart_data(symbol: str, timeframe: str = "15m", limit: int = 1000,
                 "macd_sig_slope_pct": None if pd.isna(row.get('custom_macd_sig_slope_pct')) else row['custom_macd_sig_slope_pct'],
                 "macd_momentum_pct": None if pd.isna(row.get('custom_macd_momentum_pct')) else row['custom_macd_momentum_pct'],
                 "macd_sig_momentum_pct": None if pd.isna(row.get('custom_macd_sig_momentum_pct')) else row['custom_macd_sig_momentum_pct'],
+                "adx":          None if pd.isna(row.get('adx')) else row['adx'],
+                "adx_plus_di":  None if pd.isna(row.get('adx_plus_di')) else row['adx_plus_di'],
+                "adx_minus_di": None if pd.isna(row.get('adx_minus_di')) else row['adx_minus_di'],
             })
-        return {"symbol": symbol, "data": formatted_data}
+        return {"symbol": symbol, "data": formatted_data,
+                "adx_threshold": float(os.environ.get("ADX_ENTRY_THRESHOLD", 25.0))}
     except Exception as e:
         logger.error(f"Lỗi lấy chart data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
