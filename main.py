@@ -17,6 +17,7 @@ import uvicorn
 from src.database.db import init_db
 from src.core.bot_manager import BotManager
 from src.core.security import VaultService
+from src.core.scheduler import SchedulerRegistry
 
 load_dotenv()
 
@@ -61,6 +62,13 @@ async def main():
     except Exception as e:
         logger.error(f"[ERR] Lỗi khởi tạo DB: {e}")
 
+    # ── Khởi tạo Background Job Scheduler ────────────────────────────────────
+    # Đọc REDIS_URL từ .env, fallback về localhost nếu không có.
+    # Các module khác (apps) đăng ký job của mình qua SchedulerRegistry.register()
+    # TRƯỚC khi gọi scheduler.start() ở dưới.
+    SchedulerRegistry.initialize()
+    scheduler = SchedulerRegistry.get()
+
     bot_manager = BotManager()
     
     # Delayed import to avoid circular dependencies
@@ -68,6 +76,13 @@ async def main():
     set_bot_manager(bot_manager)
 
     manager_task = asyncio.create_task(bot_manager.start())
+
+    # ── Start Scheduler (sau khi tất cả job đã được đăng ký) ─────────────────
+    try:
+        await scheduler.start()
+        logger.info("[OK] Background Job Scheduler started")
+    except Exception as e:
+        logger.warning(f"[WARN] Scheduler start failed (Redis unavailable?): {e} — tiếp tục không có scheduler")
 
     def handle_signal(sig, frame):
         logger.info(f"Nhận tín hiệu tắt, đang dừng BotManager...")
@@ -94,6 +109,9 @@ async def main():
     
     if not manager_task.done():
         manager_task.cancel()
+
+    # ── Graceful shutdown Scheduler ───────────────────────────────────────────
+    await scheduler.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
