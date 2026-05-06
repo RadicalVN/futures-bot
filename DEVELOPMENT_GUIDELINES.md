@@ -228,22 +228,41 @@ Trước khi viết code, AI phải trình bày một bản kế hoạch ngắn 
 
 - Chỉ thực thi **sau khi nhận được xác nhận (Confirm)** từ người dùng.
 - **Atomic Changes:** Thực hiện thay đổi theo từng phần nhỏ. Không sửa quá nhiều file cùng lúc nếu không liên quan trực tiếp đến Task.
+- **Bắt buộc tự Review → Build → Run Check** sau khi implement xong, trước khi báo cáo hoàn thành:
+
+| Bước | Hành động | Công cụ |
+|---|---|---|
+| **Review** | Đọc lại toàn bộ file đã thay đổi, kiểm tra logic, type hint, docstring | `getDiagnostics` |
+| **Build** | Chạy static check, xác nhận không có lỗi import hay syntax | `getDiagnostics` |
+| **Run Check** | Viết và chạy script kiểm thử nhanh bằng `venv\Scripts\python.exe` để xác nhận code chạy đúng | `executePwsh` |
+
+> ⚠️ **Lưu ý môi trường:** Luôn dùng `venv\Scripts\python.exe` (Windows) thay vì `python` trực tiếp để đảm bảo đúng interpreter của project có đủ dependencies.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│              AI EXECUTION FLOW                           │
-│                                                          │
-│   [Task nhận được]                                       │
-│        │                                                 │
-│        ▼                                                 │
-│   Bước 1: Đọc file liên quan → Xác định side effects    │
-│        │                                                 │
-│        ▼                                                 │
-│   Bước 2: Trình bày kế hoạch → Chờ xác nhận ──► STOP   │
-│        │ (confirmed)                                     │
-│        ▼                                                 │
-│   Bước 3: Implement từng phần nhỏ → Verify              │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    AI EXECUTION FLOW                             │
+│                                                                  │
+│   [Task nhận được]                                               │
+│        │                                                         │
+│        ▼                                                         │
+│   Bước 1: Đọc file liên quan → Xác định side effects            │
+│        │                                                         │
+│        ▼                                                         │
+│   Bước 2: Trình bày kế hoạch → Chờ xác nhận ──────────► STOP   │
+│        │ (confirmed)                                             │
+│        ▼                                                         │
+│   Bước 3: Implement từng phần nhỏ                               │
+│        │                                                         │
+│        ▼                                                         │
+│        ├─► Review: Đọc lại file đã sửa, getDiagnostics          │
+│        │                                                         │
+│        ├─► Build: Kiểm tra import/syntax không lỗi              │
+│        │                                                         │
+│        └─► Run Check: venv\Scripts\python.exe <test_script>     │
+│                 │                                                │
+│                 ├── PASS → Báo cáo hoàn thành                   │
+│                 └── FAIL → Sửa lỗi → Lặp lại Review/Build/Run  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -305,7 +324,7 @@ Mỗi khi viết xong một function/module, AI **bắt buộc** cung cấp mộ
 | Lưu API key | Encrypted + VaultService | Plain text |
 | Viết hàm | ≤ 50 dòng, 1 nhiệm vụ | Hàm "God" làm mọi thứ |
 | Type hint | Bắt buộc 100% | Bỏ qua |
-| Nhận task mới | Discovery → Proposal → Confirm → Implement | Code ngay lập tức |
+| Nhận task mới | Discovery → Proposal → Confirm → Implement → Review/Build/Run | Code ngay lập tức |
 | Phát hiện code smell | Báo cáo, hỏi ý kiến | Tự ý refactor |
 | Hoàn thành function | Cung cấp Example Usage / Unit Test | Không có verification |
 | Thêm thư viện mới | Xin phép Tech Lead | Tự ý thêm vào requirements |

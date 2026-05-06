@@ -39,14 +39,67 @@ class ExchangeAccount(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), nullable=False)           # vd: Tài khoản Binance Chính
     exchange_id = Column(String(50), default="binance")  # binance, okx, bybit...
-    api_key = Column(String(255), nullable=True)         # Có thể mã hóa ở tầng logic
-    api_secret = Column(String(255), nullable=True)
+    # ⚠️  Lưu dưới dạng Fernet-encrypted ciphertext — KHÔNG lưu plain text.
+    # Decrypt tại runtime qua: VaultService.decrypt_string(account.api_key)
+    # Để mã hóa lại các key cũ: chạy scripts/migrate_api_keys.py
+    api_key = Column(String(500), nullable=True)
+    api_secret = Column(String(500), nullable=True)
     mode = Column(String(20), default="testnet")         # testnet / mainnet
     is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     
     bots = relationship("Bot", back_populates="account")
+
+    def get_plain_api_key(self) -> str:
+        """Giải mã và trả về api_key dạng plain text.
+
+        Luôn gọi method này thay vì đọc ``self.api_key`` trực tiếp khi cần
+        truyền key vào exchange client.
+
+        Returns:
+            API key dạng plain text.
+
+        Raises:
+            ValueError: Nếu ``api_key`` chưa được set hoặc không thể giải mã.
+            RuntimeError: Nếu ``VAULT_ENCRYPTION_KEY`` chưa được cấu hình.
+
+        Example:
+            >>> plain_key = account.get_plain_api_key()
+            >>> exchange = BinanceExchange(api_key=plain_key, ...)
+        """
+        from src.core.security import VaultService
+
+        if not self.api_key:
+            raise ValueError(
+                f"ExchangeAccount id={self.id} ({self.name}) chưa có api_key."
+            )
+        return VaultService.decrypt_string(self.api_key)
+
+    def get_plain_api_secret(self) -> str:
+        """Giải mã và trả về api_secret dạng plain text.
+
+        Luôn gọi method này thay vì đọc ``self.api_secret`` trực tiếp khi cần
+        truyền secret vào exchange client.
+
+        Returns:
+            API secret dạng plain text.
+
+        Raises:
+            ValueError: Nếu ``api_secret`` chưa được set hoặc không thể giải mã.
+            RuntimeError: Nếu ``VAULT_ENCRYPTION_KEY`` chưa được cấu hình.
+
+        Example:
+            >>> plain_secret = account.get_plain_api_secret()
+            >>> exchange = BinanceExchange(api_secret=plain_secret, ...)
+        """
+        from src.core.security import VaultService
+
+        if not self.api_secret:
+            raise ValueError(
+                f"ExchangeAccount id={self.id} ({self.name}) chưa có api_secret."
+            )
+        return VaultService.decrypt_string(self.api_secret)
 
     def to_dict(self):
         return {

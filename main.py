@@ -16,6 +16,7 @@ import uvicorn
 
 from src.database.db import init_db
 from src.core.bot_manager import BotManager
+from src.core.security import VaultService
 
 load_dotenv()
 
@@ -45,6 +46,14 @@ async def main():
     logger.info("=" * 60)
 
     setup_logging()
+
+    # ── Startup validation: fail-fast nếu VAULT_ENCRYPTION_KEY thiếu/sai ──────
+    try:
+        VaultService.validate_key()
+    except RuntimeError as e:
+        logger.critical(f"[VAULT] {e}")
+        logger.critical("Bot không thể khởi động khi thiếu VAULT_ENCRYPTION_KEY. Dừng lại.")
+        sys.exit(1)
 
     try:
         await init_db()

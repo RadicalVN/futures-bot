@@ -8,9 +8,12 @@ https://t.me/ccxt_announcements/92
 """
 import os
 import asyncio
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import ccxt.async_support as ccxt
 from loguru import logger
+
+if TYPE_CHECKING:
+    from src.database.models import ExchangeAccount
 
 
 class BinanceExchange:
@@ -276,7 +279,17 @@ class BinanceExchange:
 
 
 def create_exchange_from_env() -> BinanceExchange:
-    """Factory function — tạo exchange từ biến môi trường"""
+    """Factory function — tạo exchange từ biến môi trường.
+
+    Dùng cho các trường hợp đặc biệt (script, CLI).
+    Trong production, ưu tiên dùng ``create_exchange_from_account()``.
+
+    Returns:
+        BinanceExchange instance chưa connect.
+
+    Raises:
+        ValueError: Nếu BINANCE_API_KEY chưa được cấu hình.
+    """
     from dotenv import load_dotenv
     load_dotenv()
 
@@ -291,3 +304,43 @@ def create_exchange_from_env() -> BinanceExchange:
         )
 
     return BinanceExchange(api_key=api_key, api_secret=api_secret, mode=mode)
+
+
+def create_exchange_from_account(account: "ExchangeAccount") -> BinanceExchange:
+    """Factory function — tạo exchange từ ExchangeAccount với decrypt tự động.
+
+    Đây là factory function chuẩn cho production. Tự động giải mã
+    ``api_key`` và ``api_secret`` qua ``VaultService`` trước khi khởi tạo.
+
+    Args:
+        account: ORM model ``ExchangeAccount`` với api_key/api_secret đã mã hóa.
+
+    Returns:
+        BinanceExchange instance chưa connect (cần gọi ``await exchange.connect()``).
+
+    Raises:
+        ValueError: Nếu account thiếu api_key hoặc api_secret,
+            hoặc không thể giải mã (sai key, plain text chưa migrate).
+        RuntimeError: Nếu ``VAULT_ENCRYPTION_KEY`` chưa được cấu hình.
+
+    Example:
+        >>> exchange = create_exchange_from_account(account)
+        >>> await exchange.connect()
+        >>> balance = await exchange.get_balance()
+        >>> await exchange.close()
+    """
+    if not account.api_key or not account.api_secret:
+        raise ValueError(
+            f"ExchangeAccount id={account.id} thiếu api_key hoặc api_secret."
+        )
+
+    plain_api_key = account.get_plain_api_key()
+    plain_api_secret = account.get_plain_api_secret()
+
+    logger.debug(f"🔓 Đã decrypt credentials cho account id={account.id} ({account.name})")
+
+    return BinanceExchange(
+        api_key=plain_api_key,
+        api_secret=plain_api_secret,
+        mode=account.mode,
+    )
