@@ -637,8 +637,11 @@ async def get_data_range(
 
 async def get_active_datasets() -> list[dict]:
     """
-    Detect tự động các (strategy_name, symbol, timeframe) cần cache
-    dựa trên danh sách bot active (is_deleted=False).
+    Detect tự động các (strategy_name, symbol, timeframe) cần cache.
+
+    Nguồn 1: Bot active trong DB (is_deleted=False) — như cũ.
+    Nguồn 2: Các dataset đã có data trong ohlcv_candles (kể cả kéo thủ công,
+             ví dụ sma_macd_cross_v6 chưa có bot nhưng đã kéo data).
 
     Với ADTS: thêm cả timeframe '1d' (cần cho daily calibration).
     Trả về list[{strategy_name, symbol, timeframe}].
@@ -647,6 +650,7 @@ async def get_active_datasets() -> list[dict]:
     datasets = []
     seen = set()
 
+    # ── Nguồn 1: Bot active ───────────────────────────────────────────────────
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Bot).where(Bot.is_deleted == False)
@@ -680,6 +684,32 @@ async def get_active_datasets() -> list[dict]:
                         "timeframe":     "1d",
                     })
 
+    # ── Nguồn 2: Dataset đã có data trong DB (kéo thủ công / backtest-only) ──
+    # Query distinct (strategy_name, symbol, timeframe) từ ohlcv_candles.
+    # Điều này đảm bảo V6 (và bất kỳ chiến lược nào chưa có bot) vẫn hiển thị
+    # trong bảng trạng thái sau khi user kéo data thủ công.
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(
+                OHLCVCandle.strategy_name,
+                OHLCVCandle.symbol,
+                OHLCVCandle.timeframe,
+            ).distinct()
+        )
+        existing_datasets = result.all()
+
+    for row in existing_datasets:
+        key = (row.strategy_name, row.symbol, row.timeframe)
+        if key not in seen:
+            seen.add(key)
+            datasets.append({
+                "strategy_name": row.strategy_name,
+                "symbol":        row.symbol,
+                "timeframe":     row.timeframe,
+            })
+
+    # Sắp xếp để hiển thị nhất quán
+    datasets.sort(key=lambda d: (d["strategy_name"], d["symbol"], d["timeframe"]))
     return datasets
 
 

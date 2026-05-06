@@ -456,3 +456,97 @@ def add_custom_macd_to_df(
     df['custom_macd_sig_momentum_pct']  = _calc_momentum_pct(signal_arr)
 
     return df
+
+
+def add_adx_to_df(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """
+    Tính ADX (Average Directional Index) và thêm vào DataFrame.
+
+    Columns thêm vào:
+    - adx        : ADX line (độ mạnh xu hướng, 0–100)
+    - adx_plus_di : +DI
+    - adx_minus_di: -DI
+
+    period: chu kỳ Wilder smoothing, mặc định 14
+    """
+    high  = df["high"].to_numpy(dtype=float)
+    low   = df["low"].to_numpy(dtype=float)
+    close = df["close"].to_numpy(dtype=float)
+    n     = len(df)
+
+    plus_dm  = np.zeros(n)
+    minus_dm = np.zeros(n)
+    tr_arr   = np.zeros(n)
+
+    for i in range(1, n):
+        h_diff = high[i]  - high[i - 1]
+        l_diff = low[i - 1] - low[i]
+
+        plus_dm[i]  = h_diff if (h_diff > l_diff and h_diff > 0) else 0.0
+        minus_dm[i] = l_diff if (l_diff > h_diff and l_diff > 0) else 0.0
+
+        tr_arr[i] = max(
+            high[i] - low[i],
+            abs(high[i] - close[i - 1]),
+            abs(low[i]  - close[i - 1]),
+        )
+
+    # Wilder smoothing (RMA)
+    def _wilder_smooth(arr: np.ndarray, p: int) -> np.ndarray:
+        out = np.zeros(n)
+        # Seed: sum of first p values
+        if p < n:
+            out[p] = arr[1:p + 1].sum()
+            for i in range(p + 1, n):
+                out[i] = out[i - 1] - out[i - 1] / p + arr[i]
+        return out
+
+    atr_s    = _wilder_smooth(tr_arr,   period)
+    plus_s   = _wilder_smooth(plus_dm,  period)
+    minus_s  = _wilder_smooth(minus_dm, period)
+
+    plus_di  = np.where(atr_s != 0, 100 * plus_s  / atr_s, 0.0)
+    minus_di = np.where(atr_s != 0, 100 * minus_s / atr_s, 0.0)
+
+    dx = np.where(
+        (plus_di + minus_di) != 0,
+        100 * np.abs(plus_di - minus_di) / (plus_di + minus_di),
+        0.0,
+    )
+
+    # ADX = Wilder smooth của DX
+    adx = np.zeros(n)
+    start = period * 2  # cần đủ dữ liệu cho cả DM smoothing lẫn ADX smoothing
+    if start < n:
+        adx[start] = dx[period:start + 1].mean()  # seed ADX
+        for i in range(start + 1, n):
+            adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period
+
+    df["adx"]         = adx
+    df["adx_plus_di"] = plus_di
+    df["adx_minus_di"] = minus_di
+
+    return df
+
+
+def add_bb_to_df(df: pd.DataFrame, period: int = 20, mult: float = 2.0) -> pd.DataFrame:
+    """
+    Tính Bollinger Bands và thêm vào DataFrame.
+
+    Columns thêm vào:
+    - bb_upper  : Dải trên  = SMA(period) + mult × std
+    - bb_middle : Dải giữa  = SMA(period)
+    - bb_lower  : Dải dưới  = SMA(period) - mult × std
+
+    period: chu kỳ SMA, mặc định 20
+    mult  : hệ số độ lệch chuẩn, mặc định 2.0
+    """
+    close = df["close"]
+    middle = close.rolling(period).mean()
+    std    = close.rolling(period).std(ddof=0)   # population std — giống TradingView
+
+    df["bb_upper"]  = middle + mult * std
+    df["bb_middle"] = middle
+    df["bb_lower"]  = middle - mult * std
+
+    return df
