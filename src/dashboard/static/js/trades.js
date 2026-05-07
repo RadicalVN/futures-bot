@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { renderAIInsightsCard } from './ai.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,8 +194,10 @@ async function _loadTradeHistory() {
     return;
   }
 
-  tbody.innerHTML = trades.map(t => `
-    <tr>
+  tbody.innerHTML = trades.map(t => {
+    const aiCard = renderAIInsightsCard(t.id, t.ai_insights);
+    return `
+    <tr data-trade-id="${t.id}">
       <td style="color:#8892a4;font-size:12px;">${fmtTime(t.created_at)}</td>
       <td><strong>${t.symbol}</strong></td>
       <td>${sideLabel(t.side, t.signal_type)}</td>
@@ -207,7 +210,13 @@ async function _loadTradeHistory() {
       <td>${statusBadge(t.status)}</td>
       <td style="color:#8892a4;font-size:12px;">${fmtTime(t.closed_at)}</td>
     </tr>
-  `).join('');
+    ${t.ai_insights ? `
+    <tr data-trade-id="${t.id}" class="ai-insights-row">
+      <td colspan="11" style="padding:0 12px 12px 12px;background:rgba(0,0,0,0.1);">
+        ${aiCard}
+      </td>
+    </tr>` : ''}
+  `}).join('');
 }
 
 // ── Bot filter dropdown ───────────────────────────────────────────────────────

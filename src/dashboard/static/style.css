@@ -126,3 +126,69 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
 .bot-toggle.toggle-on .toggle-label {
   color: var(--text-primary);
 }
+
+/* ── AI Insights — Mobile-First ──────────────────────────────────────────── */
+
+/* Card base */
+.ai-insights-card {
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+.ai-insights-card:hover {
+  filter: brightness(1.04);
+}
+
+/* Row separator — no double border */
+.ai-insights-row td {
+  border-top: none !important;
+  padding-top: 0 !important;
+}
+
+/* Touch-friendly feedback buttons */
+.ai-feedback-btn {
+  /* min 44×44px enforced via inline style — CSS fallback */
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+}
+
+.ai-feedback-btn:hover {
+  filter: brightness(1.15);
+  transform: scale(1.06);
+}
+
+.ai-feedback-btn:active {
+  transform: scale(0.93);
+}
+
+/* Bottom sheet slide-up animation */
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* Gradient confidence bar thumb glow */
+.ai-confidence-thumb {
+  transition: left 0.4s ease;
+}
+
+/* AI Stats panel */
+#aiStatsPanel {
+  margin-top: 16px;
+}
+
+/* Responsive: stack on very small screens */
+@media (max-width: 480px) {
+  .ai-insights-card {
+    padding: 12px !important;
+  }
+  .ai-feedback-btn {
+    min-width: 48px !important;
+    min-height: 48px !important;
+    font-size: 20px !important;
+  }
+}
+

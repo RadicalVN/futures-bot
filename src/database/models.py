@@ -239,7 +239,20 @@ class Trade(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     closed_at = Column(DateTime)
     
+    # Relationship với AI feedbacks
+    ai_feedbacks = relationship("AIFeedback", back_populates="trade", cascade="all, delete-orphan")
+
     def to_dict(self):
+        # Trích xuất AI data từ signal_metadata để frontend hiển thị AI Insights
+        meta = self.signal_metadata or {}
+        ai_data = {
+            "decision":         meta.get("ai_decision"),
+            "confidence_score": meta.get("ai_confidence_score"),
+            "analysis":         meta.get("ai_analysis"),
+            "latency_ms":       meta.get("ai_latency_ms"),
+            "skipped_reason":   meta.get("ai_skipped_reason"),
+        } if meta.get("ai_decision") else None
+
         return {
             "id": self.id,
             "bot_id": self.bot_id,
@@ -258,6 +271,8 @@ class Trade(Base):
             "strategy": self.strategy,
             "signal_type": self.signal_type,
             "leverage": self.leverage,
+            "signal_metadata": meta,
+            "ai_insights": ai_data,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
@@ -514,3 +529,64 @@ class SystemSetting(Base):
     @classmethod
     def make(cls, key: str, value: str) -> "SystemSetting":
         return cls(key=key, value=value)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI Feedback — Phản hồi người dùng về quyết định của AI
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AIFeedback(Base):
+    """Lưu phản hồi của người dùng về độ chính xác của AI Analyzer.
+
+    Mỗi record gắn với 1 Trade (hoặc EntryOpportunity) và chứa:
+    - rating: "like" (AI đúng) hoặc "dislike" (AI sai)
+    - comment: Ghi chú tùy chọn từ người dùng
+    - Snapshot AI decision tại thời điểm phản hồi (để thống kê sau này)
+
+    Dùng cho:
+    1. Thống kê win-rate của AI (approve → trade thắng bao nhiêu %)
+    2. Few-shot prompting: lấy dislike examples đưa vào prompt Gemini
+    """
+    __tablename__ = "ai_feedbacks"
+
+    id            = Column(Integer,     primary_key=True, autoincrement=True)
+
+    # Gắn với Trade (nullable — có thể gắn với EntryOpportunity thay thế)
+    trade_id      = Column(Integer, ForeignKey("trades.id", ondelete="CASCADE"), nullable=True)
+    trade         = relationship("Trade", back_populates="ai_feedbacks")
+
+    # Gắn với EntryOpportunity (nullable — khi AI reject, không có Trade)
+    opp_id        = Column(Integer, ForeignKey("entry_opportunities.id", ondelete="CASCADE"), nullable=True)
+
+    # Phản hồi của người dùng
+    rating        = Column(String(10),  nullable=False)   # "like" | "dislike"
+    comment       = Column(Text,        nullable=True)    # Ghi chú tùy chọn
+
+    # Snapshot AI decision tại thời điểm phản hồi (để thống kê độc lập)
+    ai_decision   = Column(String(10),  nullable=True)    # "approve" | "reject" | "skip"
+    ai_confidence = Column(Integer,     nullable=True)    # 0-100
+
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        # Index để query nhanh theo trade
+        Index("ix_ai_feedbacks_trade_id", "trade_id"),
+        Index("ix_ai_feedbacks_rating",   "rating"),
+    )
+
+    def to_dict(self) -> dict:
+        """Chuyển sang dict JSON-serializable.
+
+        Returns:
+            Dict chứa toàn bộ thông tin feedback.
+        """
+        return {
+            "id":            self.id,
+            "trade_id":      self.trade_id,
+            "opp_id":        self.opp_id,
+            "rating":        self.rating,
+            "comment":       self.comment,
+            "ai_decision":   self.ai_decision,
+            "ai_confidence": self.ai_confidence,
+            "created_at":    self.created_at.isoformat() if self.created_at else None,
+        }
