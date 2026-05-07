@@ -69,6 +69,18 @@ async def main():
     SchedulerRegistry.initialize()
     scheduler = SchedulerRegistry.get()
 
+    # ── Đăng ký ExitMonitorService job ───────────────────────────────────────
+    # Quét toàn bộ Trade OPEN cross-bot mỗi 30 giây.
+    # Phải đăng ký TRƯỚC khi scheduler.start() để job được kích hoạt ngay.
+    from src.apps.monitoring import setup_exit_monitor_job
+    setup_exit_monitor_job(scheduler)
+
+    # ── Đăng ký OHLCVCollectorService job ────────────────────────────────────
+    # Thu thập dữ liệu nến OHLCV từ Binance mỗi 60 giây.
+    # Quét song song tất cả (strategy, symbol, timeframe) mà Bot đang yêu cầu.
+    from src.apps.data_collector import setup_data_collector_job
+    setup_data_collector_job(scheduler)
+
     bot_manager = BotManager()
     
     # Delayed import to avoid circular dependencies
