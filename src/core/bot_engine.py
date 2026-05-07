@@ -326,6 +326,24 @@ class BotEngine:
         except Exception as e:
             self.log.debug(f"_reload_settings lỗi (bỏ qua): {e}")
 
+    async def _write_heartbeat(self) -> None:
+        """Cập nhật Bot.updated_at để đánh dấu bot còn sống (Heartbeat).
+
+        Được gọi cuối mỗi _run_cycle thành công, kể cả khi không có lệnh nào.
+        Health Check Service dùng updated_at để phát hiện bot bị treo:
+        nếu updated_at < now - 10 phút thì cảnh báo.
+
+        Lỗi heartbeat được bỏ qua (debug log) để không làm gián đoạn cycle.
+        """
+        try:
+            async with get_db() as db:
+                result = await db.execute(select(Bot).where(Bot.id == self.bot_id))
+                bot_row = result.scalar_one_or_none()
+                if bot_row:
+                    bot_row.updated_at = datetime.utcnow()
+        except Exception as e:
+            self.log.debug(f"_write_heartbeat lỗi (bỏ qua): {e}")
+
     # ── Main cycle ────────────────────────────────────────────────────────────
 
     async def _run_cycle(self):
@@ -391,6 +409,10 @@ class BotEngine:
 
             # 4. Kiểm tra có nến 5m mới đóng không → gửi status report
             await self._maybe_send_candle_report(positions)
+
+            # 5. Heartbeat — cập nhật updated_at để Health Check biết bot còn sống.
+            #    Chạy cuối mỗi cycle thành công, kể cả khi không có lệnh nào.
+            await self._write_heartbeat()
 
         except Exception as e:
             self.log.error(

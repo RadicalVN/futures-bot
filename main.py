@@ -81,6 +81,12 @@ async def main():
     from src.apps.data_collector import setup_data_collector_job
     setup_data_collector_job(scheduler)
 
+    # ── Đăng ký HealthCheckService job ───────────────────────────────────────
+    # Giám sát DB, Redis, Bot heartbeat và Binance API mỗi 5 phút.
+    # Gửi Discord alert ngay khi phát hiện sự cố.
+    from src.apps.monitoring import setup_health_check_job
+    setup_health_check_job(scheduler)
+
     bot_manager = BotManager()
     
     # Delayed import to avoid circular dependencies
