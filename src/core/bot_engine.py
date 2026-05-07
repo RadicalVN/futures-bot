@@ -344,6 +344,57 @@ class BotEngine:
         except Exception as e:
             self.log.debug(f"_write_heartbeat lỗi (bỏ qua): {e}")
 
+    async def _run_ai_filter(
+        self,
+        signal,
+        ohlcv:          list,
+        indicator_data: dict,
+    ):
+        """Chạy AI Strategy Analyzer nếu ai_filter_enabled=True trong Bot.parameters.
+
+        Fail-open: Mọi lỗi đều trả về None (không chặn lệnh).
+        Chỉ trả về AIAnalysisResult khi AI thực sự chạy được.
+
+        Args:
+            signal: StrategySignal instance.
+            ohlcv: Dữ liệu nến OHLCV.
+            indicator_data: Dict chứa ma_fast, ma_slow, macd, ...
+
+        Returns:
+            AIAnalysisResult nếu AI chạy, None nếu bị tắt hoặc lỗi nghiêm trọng.
+        """
+        if not self.parameters.get("ai_filter_enabled", False):
+            return None  # AI filter tắt → bỏ qua
+
+        if not signal.is_entry:
+            return None  # Chỉ filter entry, không filter exit
+
+        try:
+            from src.core.ai_analyzer import analyze_signal
+
+            timeout  = float(self.parameters.get("ai_timeout_seconds", 10.0))
+            min_conf = int(self.parameters.get("ai_min_confidence", 60))
+
+            return await analyze_signal(
+                signal_type=signal.signal,
+                symbol=signal.symbol,
+                strategy_name=self.strategy_name,
+                signal_reason=signal.reason,
+                ohlcv=ohlcv,
+                current_price=signal.price,
+                timeframe=self.timeframe,
+                metadata=dict(signal.metadata or {}),
+                indicator_data=indicator_data,
+                timeout_seconds=timeout,
+                min_confidence=min_conf,
+            )
+        except Exception as exc:
+            self.log.warning(
+                f"[AIFilter] Lỗi không mong đợi khi gọi AI cho {signal.symbol}: "
+                f"{type(exc).__name__}: {exc} → bỏ qua (fail-open)"
+            )
+            return None
+
     # ── Main cycle ────────────────────────────────────────────────────────────
 
     async def _run_cycle(self):
@@ -614,6 +665,36 @@ class BotEngine:
                     if self.notify_entry:
                         await self._notify_entry_blocked(signal, reason=f"Đạt giới hạn {effective_max} vị thế")
                 else:
+                    # ── AI Strategy Analyzer (optional, per-bot opt-in) ───────
+                    # Chỉ chạy khi ai_filter_enabled=True trong Bot.parameters.
+                    # Fail-open: nếu AI lỗi/timeout → decision="skip" → đặt lệnh bình thường.
+                    ai_result = await self._run_ai_filter(
+                        signal=signal,
+                        ohlcv=ohlcv,
+                        indicator_data=indicator_data,
+                    )
+                    if ai_result is not None and ai_result.decision == "reject":
+                        self.log.info(
+                            f"🤖 AI REJECT [{signal.signal.upper()}] {trading_symbol} "
+                            f"| confidence={ai_result.confidence_score} "
+                            f"| {ai_result.analysis[:100]}"
+                        )
+                        # Lưu AI decision vào metadata của signal để EntryOpportunity ghi nhận
+                        if signal.metadata is None:
+                            signal.metadata = {}
+                        signal.metadata.update(ai_result.to_metadata_dict())
+                        # Ghi nhận opportunity nhưng không đặt lệnh
+                        if self.notify_entry:
+                            await self._notify_entry_blocked(
+                                signal,
+                                reason=f"AI Reject (confidence={ai_result.confidence_score}): {ai_result.analysis[:100]}",
+                            )
+                        return
+
+                    # Nếu AI approve hoặc skip → tiếp tục đặt lệnh
+                    if ai_result is not None and signal.metadata is not None:
+                        signal.metadata.update(ai_result.to_metadata_dict())
+
                     try:
                         self.order_manager.effective_max_positions = effective_max
                         await self.order_manager.process_signal(signal, indicator_data)
