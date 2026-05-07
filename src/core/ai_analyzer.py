@@ -11,6 +11,8 @@ Thiết kế:
       đồng thời, kết hợp exponential backoff khi gặp 429.
     - Per-bot opt-in: ai_filter_enabled=False (default) → bỏ qua hoàn toàn.
     - Kết quả lưu vào metadata của EntryOpportunity/Trade để thống kê win-rate.
+    - Few-shot learning: tự động fetch Top 3 dislike examples theo strategy_name
+      từ DB và đưa vào System Prompt để AI học từ lỗi quá khứ.
 
 Cấu hình qua Bot.parameters:
     ai_filter_enabled:  bool  — Bật/tắt AI filter (default: False)
@@ -54,6 +56,151 @@ _GEMINI_MODEL: str = "gemini-1.5-flash"
 # Semaphore toàn cục — chia sẻ giữa tất cả BotEngine instances trong cùng process.
 # Giới hạn số request đồng thời để tránh rate limit Free tier (15 RPM).
 _global_ai_semaphore: asyncio.Semaphore = asyncio.Semaphore(_MAX_CONCURRENT_AI_CALLS)
+
+# ── Few-shot constants ────────────────────────────────────────────────────────
+
+_FEW_SHOT_LIMIT: int = 3
+"""Số lượng dislike examples tối đa đưa vào prompt.
+3 examples ≈ 200 tokens — an toàn với Gemini Flash 1M token limit."""
+
+_FEW_SHOT_SNIPPET_MAX_CHARS: int = 200
+"""Giới hạn độ dài mỗi snippet (chars) để kiểm soát token budget."""
+
+_FEW_SHOT_COMMENT_MAX_CHARS: int = 100
+"""Giới hạn độ dài user comment trong snippet."""
+
+
+# ── Few-shot DB helper ────────────────────────────────────────────────────────
+
+async def _fetch_dislike_examples(strategy_name: str) -> list[dict]:
+    """Fetch Top N dislike examples từ DB theo strategy_name.
+
+    Query AIFeedback JOIN Trade để lấy đủ context:
+    - AI decision + confidence tại thời điểm sai
+    - realized_pnl thực tế (kết quả tài chính)
+    - User comment (lý do người dùng đánh giá AI sai)
+
+    Fail-open: Mọi lỗi DB đều trả về [] — không crash analyzer.
+    Không import từ apps.* để tuân thủ No Cross-App Imports rule.
+
+    Args:
+        strategy_name: Tên chiến lược để lọc examples đúng context.
+
+    Returns:
+        List dict chứa context của từng dislike example.
+        Trả về [] nếu DB rỗng hoặc gặp lỗi.
+    """
+    try:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from src.database.db import AsyncSessionLocal
+        from src.database.models import AIFeedback, Trade
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(AIFeedback)
+                .options(selectinload(AIFeedback.trade))
+                .where(
+                    AIFeedback.rating == "dislike",
+                    AIFeedback.trade_id.isnot(None),
+                )
+                .order_by(AIFeedback.created_at.desc())
+                .limit(_FEW_SHOT_LIMIT * 3)  # Lấy dư để lọc theo strategy
+            )
+            feedbacks = result.scalars().all()
+
+        # Lọc theo strategy_name và lấy đủ thông tin
+        examples = []
+        for fb in feedbacks:
+            trade = fb.trade
+            if not trade:
+                continue
+            # Lọc đúng strategy — cá nhân hóa bài học
+            if trade.strategy and trade.strategy != strategy_name:
+                continue
+
+            meta = trade.signal_metadata or {}
+            examples.append({
+                "symbol":        trade.symbol or "UNKNOWN",
+                "signal_type":   (trade.signal_type or "unknown").upper(),
+                "strategy":      trade.strategy or strategy_name,
+                "ai_decision":   fb.ai_decision or "approve",
+                "ai_confidence": fb.ai_confidence or 0,
+                "ai_analysis":   (meta.get("ai_analysis") or "")[:_FEW_SHOT_COMMENT_MAX_CHARS],
+                "realized_pnl":  trade.realized_pnl,
+                "user_comment":  (fb.comment or "")[:_FEW_SHOT_COMMENT_MAX_CHARS],
+            })
+            if len(examples) >= _FEW_SHOT_LIMIT:
+                break
+
+        return examples
+
+    except Exception as exc:
+        logger.debug(
+            f"[AIAnalyzer] _fetch_dislike_examples loi (bo qua, dung prompt mac dinh): "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return []
+
+
+def _build_few_shot_section(examples: list[dict]) -> str:
+    """Chuyển danh sách dislike examples thành phần # MISTAKES TO AVOID.
+
+    Mỗi snippet được bọc trong tag <past_mistake> để Gemini phân biệt
+    rõ đây là dữ liệu tham khảo quá khứ, không phải lệnh hiện tại.
+
+    Format mỗi snippet:
+        <past_mistake>
+        [N] Signal: LONG BTCUSDT | Strategy: sma_macd_cross
+            AI Decision: APPROVE (Conf: 72) → Actual: LOSS (-8.50 USDT)
+            User Feedback: "AI bỏ qua divergence MACD khi sideway"
+        </past_mistake>
+
+    Args:
+        examples: List dict từ _fetch_dislike_examples().
+
+    Returns:
+        String phần few-shot, hoặc "" nếu examples rỗng.
+    """
+    if not examples:
+        return ""
+
+    lines = [
+        "",
+        "# MISTAKES TO AVOID (Lessons from Historical Errors)",
+        "# The following are PAST MISTAKES you made. Learn from them.",
+        "<historical_context>",
+    ]
+
+    for i, ex in enumerate(examples, start=1):
+        pnl = ex.get("realized_pnl")
+        if pnl is not None:
+            result_label = f"WIN (+{pnl:.2f} USDT)" if pnl > 0 else f"LOSS ({pnl:.2f} USDT)"
+        else:
+            result_label = "LOSS (unknown amount)"
+
+        comment = ex.get("user_comment", "").strip()
+        comment_line = f'\n    User Feedback: "{comment}"' if comment else ""
+
+        snippet = (
+            f"<past_mistake>\n"
+            f"[{i}] Signal: {ex['signal_type']} {ex['symbol']} "
+            f"| Strategy: {ex['strategy']}\n"
+            f"    AI Decision: {ex['ai_decision'].upper()} "
+            f"(Conf: {ex['ai_confidence']}) → Actual: {result_label}"
+            f"{comment_line}\n"
+            f"</past_mistake>"
+        )
+        lines.append(snippet)
+
+    lines.extend([
+        "</historical_context>",
+        "# Apply these lessons: be more cautious in similar situations.",
+        "# Do NOT repeat these mistakes in your current analysis.",
+        "",
+    ])
+
+    return "\n".join(lines)
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
@@ -379,10 +526,25 @@ async def analyze_signal(
     try:
         import google.generativeai as genai
 
+        # ── Few-shot: fetch dislike examples theo strategy ────────────────────
+        # Fail-open: nếu DB lỗi → examples = [] → dùng prompt mặc định
+        examples = await _fetch_dislike_examples(strategy_name)
+        few_shot_section = _build_few_shot_section(examples)
+
+        logger.info(
+            f"[AIAnalyzer] Phan tich {symbol} {signal_type.upper()} "
+            f"| Strategy: {strategy_name} "
+            f"| {len(examples)} historical lesson(s) loaded"
+        )
+
+        # ── Build dynamic system prompt ───────────────────────────────────────
+        # Base prompt + few-shot section (rỗng nếu không có examples)
+        dynamic_system_prompt = _SYSTEM_PROMPT + few_shot_section
+
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
             model_name=_GEMINI_MODEL,
-            system_instruction=_SYSTEM_PROMPT,
+            system_instruction=dynamic_system_prompt,
         )
 
         user_prompt = _build_user_prompt(
