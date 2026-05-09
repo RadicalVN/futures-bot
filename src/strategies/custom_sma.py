@@ -1,357 +1,457 @@
-import pandas as pd
+"""
+custom_sma.py — Custom SMA Strategy (ittuantruong)
+
+Chiến thuật dựa trên chỉ báo Custom SMA:
+  1. Tính SMA nhanh + chậm, kết hợp và làm mượt thêm → center_line
+  2. Tạo band_up / band_dn từ center_line và log(10)
+  3. State machine xác định trend_direction (+1 / -1)
+  4. Entry khi trend đảo chiều, Exit khi trend đảo ngược vị thế
+
+Momentum analysis (1-phiên và n-phiên) được tính từ SMA(bb_length)
+để cung cấp thêm context cho dashboard và AI filter.
+"""
+from __future__ import annotations
+
 import numpy as np
+import pandas as pd
+from loguru import logger
+
+from src.data.indicators import add_custom_sma_to_df
 from src.strategies.base_strategy import BaseStrategy, StrategySignal
 
+
 class CustomSMAStrategy(BaseStrategy):
-    """
-    Chiến thuật giao dịch dựa trên chỉ báo Custom SMA (ittuantruong).
-    
-    Phương pháp hoạt động:
-    1. Tính toán trung bình động (SMA) nhanh và chậm, sau đó kết hợp và làm mượt thêm.
-    2. Xác định đường trung tâm (center_line) và tạo dải băng trên (band_up), dải băng dưới (band_dn).
-    3. Xác định xu hướng (trend_direction) dựa trên cấu trúc dải băng và hệ số nhiễu (factor).
-    4. Cung cấp tín hiệu LONG khi xu hướng chuyển Tăng (1) và SHORT khi xu hướng chuyển Giảm (-1).
+    """Custom SMA Strategy — Zero-Core-Edit plugin.
+
+    Kế thừa BaseStrategy và triển khai đầy đủ contract:
+    - STRATEGY_NAME = "custom_sma"
+    - get_required_lookback(): tự tính lookback
+    - prepare_metadata(): tính indicators cho ExitMonitorService
+    - analyze(): logic giao dịch đầy đủ
     """
 
-    def __init__(self, config: dict):
+    STRATEGY_NAME: str = "custom_sma"
+
+    # ── Class-level contract ──────────────────────────────────────────────────
+
+    @classmethod
+    def get_required_lookback(cls, parameters: dict) -> int:
+        """Tính số nến tối thiểu cần thiết.
+
+        Args:
+            parameters: Dict tham số từ Bot.parameters.
+
+        Returns:
+            Số nến tối thiểu để tính đủ SMA và momentum.
         """
-        Khởi tạo các tham số cho chiến thuật Custom SMA:
-        - fast_length: Chu kỳ của đường SMA nhanh.
-        - slow_length: Chu kỳ của đường SMA chậm.
-        - signal_length: Chu kỳ dùng để làm mượt đường trung bình tổng hợp.
-        - factor: Hệ số xác định sự đảo chiều xu hướng, giúp lọc các tín hiệu nhiễu.
-        - bb_length: Chu kỳ của dải Bollinger Bands cải tiến (mặc định 50).
-        - bb_mult: Hệ số nhân độ lệch chuẩn của Bollinger Bands (mặc định 2.0).
+        len_c      = int(parameters.get("len_c", 200))
+        bb_length  = int(parameters.get("bb_length", 50))
+        momentum_n = int(parameters.get("momentum_n", 3))
+        return max(len_c, bb_length) * 2 + momentum_n * 2 + 10
+
+    # ── Constructor ───────────────────────────────────────────────────────────
+
+    def __init__(self, config: dict) -> None:
+        """Khởi tạo CustomSMAStrategy với config dict từ Bot.parameters.
+
+        Args:
+            config: Dict tham số từ Bot.parameters trong DB.
         """
         super().__init__(config)
-        self.name = "custom_sma"
-        self.fast_length = self.get_param("fast_length", 1)
-        self.slow_length = self.get_param("slow_length", 5)
-        self.signal_length = self.get_param("len_c", 20)
-        self.trend_factor = self.get_param("factor", 0.05)
-        self.bb_length = self.get_param("bb_length", 50)
-        self.bb_mult = self.get_param("bb_mult", 2.0)
-        self.momentum_n = self.get_param("momentum_n", 3)  # Bước nhảy n phiên để tính gia tốc dài hạn
 
-    async def analyze(self, symbol: str, ohlcv_data: list, current_positions: list) -> StrategySignal:
-        """
-        Phân tích dữ liệu giá để phát hiện xu hướng và đưa ra tín hiệu giao dịch.
-        
+        self.fast_length:  int   = int(self.get_param("fast_length", 1))
+        self.slow_length:  int   = int(self.get_param("slow_length", 5))
+        self.signal_length: int  = int(self.get_param("len_c", 200))
+        self.trend_factor: float = float(self.get_param("factor", 0.05))
+        self.bb_length:    int   = int(self.get_param("bb_length", 50))
+        self.bb_mult:      float = float(self.get_param("bb_mult", 2.0))
+        self.momentum_n:   int   = int(self.get_param("momentum_n", 3))
+        self.min_slope_pct:    float = float(self.get_param("min_slope_pct", 0.0))
+        self.min_momentum_pct: float = float(self.get_param("min_momentum_pct", 0.0))
+
+    # ── prepare_metadata (BaseStrategy contract) ──────────────────────────────
+
+    async def prepare_metadata(self, df: pd.DataFrame) -> dict:
+        """Tính Custom SMA indicators cho ExitMonitorService.
+
         Args:
-            symbol (str): Cặp giao dịch (ví dụ: BTC/USDT).
-            ohlcv_data (list): Danh sách dữ liệu nến OHLCV.
-            current_positions (list): Danh sách các vị thế đang mở hiện tại.
-            
+            df: DataFrame OHLCV với columns [timestamp, open, high, low, close, volume].
+
         Returns:
-            StrategySignal: Tín hiệu giao dịch (Mở/Đóng LONG/SHORT hoặc không có tín hiệu).
+            Dict metadata với trend, momentum, slope. Trả về {} nếu lỗi.
         """
-        # Khởi tạo DataFrame từ dữ liệu OHLCV
-        df = pd.DataFrame(
-            ohlcv_data,
-            columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
-        if len(df) < max(self.slow_length, self.signal_length) * 2:
-            return StrategySignal(signal="none", symbol=symbol, price=0, reason="Not enough data")
-
-        close_prices = df['close']
-
-        # 1. Tính toán các đường trung bình động (Moving Averages)
-        fast_ma = close_prices.rolling(self.fast_length).mean()
-        slow_ma = close_prices.rolling(self.slow_length).mean()
-        combined_ma = fast_ma + slow_ma
-        smoothed_ma = combined_ma.rolling(self.signal_length).mean()
-
-        # 2. Tính toán đường trung tâm và các dải băng (Bands)
-        center_line = smoothed_ma / 2
-        band_multiplier = 1
-        band_base_width = 10
-        log_width = np.log(band_base_width)
-        
-        band_up = center_line - (band_multiplier * log_width)
-        band_dn = center_line + (band_multiplier * log_width)
-
-        # Convert to numpy arrays for fast state machine simulation
-        band_dn_arr = band_dn.to_numpy()
-        band_up_arr = band_up.to_numpy()
-        center_line_arr = center_line.to_numpy()
-        
-        trend_direction = np.zeros(len(df))
-        high_bound = np.zeros(len(df))
-        low_bound = np.zeros(len(df))
-        high_limit = np.zeros(len(df))
-        low_limit = np.zeros(len(df))
-
-        # Find the first valid index to start processing
-        first_valid_idx = np.where(~np.isnan(center_line_arr))[0]
-        if len(first_valid_idx) == 0:
-            return StrategySignal(signal="none", symbol=symbol, price=0, reason="Not enough valid data")
-        
-        start_idx = first_valid_idx[0]
-        processed_count = 0
-        
-        # 3. Vòng lặp (State Machine) qua từng nến để xác định xu hướng (Trend Detection)
-        for i in range(start_idx, len(df)):
-            current_band_dn = band_dn_arr[i]
-            current_band_up = band_up_arr[i]
-            current_center = center_line_arr[i]
-            
-            if processed_count == 0:
-                low_bound[i] = current_band_dn
-                high_bound[i] = current_band_up
-                low_limit[i] = current_center
-                high_limit[i] = current_center
-            elif processed_count == 1:
-                if current_band_up >= high_bound[i-1]:
-                    high_bound[i] = current_band_up
-                    high_limit[i] = current_center
-                    trend_direction[i] = 1
-                else:
-                    low_bound[i] = current_band_dn
-                    low_limit[i] = current_center
-                    trend_direction[i] = -1
-            else:
-                if trend_direction[i-1] > 0:
-                    high_limit[i] = max(high_limit[i-1], current_center)
-                    if current_band_up >= high_bound[i-1]:
-                        high_bound[i] = current_band_up
-                        trend_direction[i] = trend_direction[i-1] # Keep trend
-                    else:
-                        # Nếu giá phá vỡ dải băng trên quá mức factor, đảo chiều sang xu hướng giảm
-                        if current_band_dn < high_bound[i-1] - high_bound[i-1] * self.trend_factor:
-                            low_bound[i] = current_band_dn
-                            low_limit[i] = current_center
-                            trend_direction[i] = -1 # Trend reversal to downward
-                        else:
-                            high_bound[i] = high_bound[i-1]
-                            low_bound[i] = low_bound[i-1]
-                            trend_direction[i] = trend_direction[i-1]
-                else:
-                    low_limit[i] = min(low_limit[i-1], current_center)
-                    if current_band_dn <= low_bound[i-1]:
-                        low_bound[i] = current_band_dn
-                        trend_direction[i] = trend_direction[i-1] # Keep trend
-                    else:
-                        # Nếu giá phá vỡ dải băng dưới quá mức factor, đảo chiều sang xu hướng tăng
-                        if current_band_up > low_bound[i-1] + low_bound[i-1] * self.trend_factor:
-                            high_bound[i] = current_band_up
-                            high_limit[i] = current_center
-                            trend_direction[i] = 1 # Trend reversal to upward
-                        else:
-                            high_bound[i] = high_bound[i-1]
-                            low_bound[i] = low_bound[i-1]
-                            trend_direction[i] = trend_direction[i-1]
-            
-            processed_count += 1
-
-        current_trend = trend_direction[-1]
-        prev_trend = trend_direction[-2]
-        
-        # 4. Tính toán phần Bollinger Bands và động lượng (Momentum) của SMA
-        basis = close_prices.rolling(self.bb_length).mean()
-        dev = close_prices.rolling(self.bb_length).std() * self.bb_mult
-        upper_bb = basis + dev
-        lower_bb = basis - dev
-        
-        # Cấu hình ngưỡng lọc nhiễu (mặc định 0 để giữ nguyên logic gốc)
-        min_slope_pct = self.get_param("min_slope_pct", 0.0)
-        min_momentum_pct = self.get_param("min_momentum_pct", 0.0)
-        
-        sma_slope_pct = 0.0
-        momentum_pct = 0.0
-        momentum_state = "Chưa rõ"
-        momentum_n_pct = 0.0
-        momentum_n_state = "Chưa rõ"
-
-        n = self.momentum_n  # Bước nhảy n phiên cho gia tốc dài hạn
-
-        # Cần ít nhất 3 điểm cho gia tốc 1 phiên, và 2*n+1 điểm cho gia tốc n phiên
-        min_required = max(3, 2 * n + 1)
-
-        if len(basis) >= min_required and not pd.isna(basis.iloc[-min_required]):
-            current_sma = basis.iloc[-1]
-            prev_sma = basis.iloc[-2]
-            older_sma = basis.iloc[-3]
-
-            # Tính toán sự thay đổi giữa các kỳ (Tương đương sma21, sma10 trong Pine Script)
-            diff_older_to_prev = older_sma - prev_sma
-            diff_prev_to_curr = prev_sma - current_sma
-
-            sma_slope = current_sma - prev_sma
-            sma_slope_pct = (sma_slope / prev_sma) * 100 if prev_sma != 0 else 0
-
-            # --- Gia tốc 1 phiên (hiện tại) ---
-            # Dự phóng giá trị SMA hiện tại theo nội suy tuyến tính (Tương đương sma0Hope)
-            projected_current_sma = 2 * prev_sma - older_sma
-
-            # Động lượng xu hướng: so sánh thực tế với dự phóng (Tương đương biến trend)
-            momentum_diff = current_sma - projected_current_sma
-            momentum_pct = (momentum_diff / projected_current_sma) * 100 if projected_current_sma != 0 else 0
-
-            if momentum_diff == 0:
-                momentum_state = "Vàng (Giữ nguyên xu hướng)"
-            elif momentum_diff > 0:
-                if diff_older_to_prev > 0:
-                    if diff_prev_to_curr > 0:
-                        momentum_state = "Cam (Giảm/Hãm độ dốc xuống)"
-                    else:
-                        momentum_state = "Tím (Đảo chiều tăng)"
-                else:
-                    momentum_state = "Xanh dương (Tăng độ dốc lên)"
-            else:
-                if diff_older_to_prev > 0:
-                    momentum_state = "Đỏ (Tăng độ dốc xuống)"
-                else:
-                    if diff_prev_to_curr < 0:
-                        momentum_state = "Xanh lá (Giảm/Hãm độ dốc lên)"
-                    else:
-                        momentum_state = "Tím (Đảo chiều giảm)"
-
-            # --- Gia tốc n phiên ---
-            # Lấy 3 điểm cách nhau n phiên: s[t-2n], s[t-n], s[t]
-            # Gia tốc = s[t] - 2*s[t-n] + s[t-2n]  (finite difference bậc 2 bước n)
-            sma_t = basis.iloc[-1]
-            sma_tn = basis.iloc[-(n + 1)]       # s[t-n]
-            sma_t2n = basis.iloc[-(2 * n + 1)]  # s[t-2n]
-
-            diff_n_older_to_prev = sma_t2n - sma_tn   # vận tốc kỳ trước (n phiên)
-            diff_n_prev_to_curr = sma_tn - sma_t       # vận tốc kỳ này (n phiên), đảo dấu để đồng hướng
-
-            projected_n = 2 * sma_tn - sma_t2n         # dự phóng tuyến tính tại t
-            momentum_n_diff = sma_t - projected_n       # gia tốc n phiên
-            momentum_n_pct = (momentum_n_diff / projected_n) * 100 if projected_n != 0 else 0
-
-            if momentum_n_diff == 0:
-                momentum_n_state = "Vàng (Giữ nguyên xu hướng)"
-            elif momentum_n_diff > 0:
-                if diff_n_older_to_prev > 0:
-                    if diff_n_prev_to_curr > 0:
-                        momentum_n_state = "Cam (Giảm/Hãm độ dốc xuống)"
-                    else:
-                        momentum_n_state = "Tím (Đảo chiều tăng)"
-                else:
-                    momentum_n_state = "Xanh dương (Tăng độ dốc lên)"
-            else:
-                if diff_n_older_to_prev > 0:
-                    momentum_n_state = "Đỏ (Tăng độ dốc xuống)"
-                else:
-                    if diff_n_prev_to_curr < 0:
-                        momentum_n_state = "Xanh lá (Giảm/Hãm độ dốc lên)"
-                    else:
-                        momentum_n_state = "Tím (Đảo chiều giảm)"
-
-        final_signal = "none"
-        reason = (f"Chờ tín hiệu | Momentum(1): {momentum_state} ({momentum_pct:.4f}%) | "
-                  f"Momentum({n}): {momentum_n_state} ({momentum_n_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%")
-        
-        # Crossover buy/sell signals
-        if current_trend == 1 and prev_trend == -1:
-            if sma_slope_pct >= min_slope_pct and momentum_pct >= min_momentum_pct:
-                final_signal = "long"
-                reason = (f"Mở LONG: Custom SMA báo Trend Tăng | "
-                          f"Momentum(1): {momentum_state} ({momentum_pct:.4f}%) | "
-                          f"Momentum({n}): {momentum_n_state} ({momentum_n_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%")
-            else:
-                reason = (f"Bỏ qua LONG: Độ dốc hoặc Gia tốc không đạt ngưỡng | "
-                          f"Momentum(1): {momentum_pct:.4f}% | Momentum({n}): {momentum_n_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%")
-        elif current_trend == -1 and prev_trend == 1:
-            if sma_slope_pct <= -min_slope_pct and momentum_pct <= -min_momentum_pct:
-                final_signal = "short"
-                reason = (f"Mở SHORT: Custom SMA báo Trend Giảm | "
-                          f"Momentum(1): {momentum_state} ({momentum_pct:.4f}%) | "
-                          f"Momentum({n}): {momentum_n_state} ({momentum_n_pct:.4f}%) | Dốc: {sma_slope_pct:.4f}%")
-            else:
-                reason = (f"Bỏ qua SHORT: Độ dốc hoặc Gia tốc không đạt ngưỡng | "
-                          f"Momentum(1): {momentum_pct:.4f}% | Momentum({n}): {momentum_n_pct:.4f}% | Dốc: {sma_slope_pct:.4f}%")
-
-        current_price = close_prices.iloc[-1]
-
-        # Check closing conditions for current positions
-        for pos in current_positions:
-            pos_symbol = pos.get("symbol", "").replace("/", "")
-            if pos_symbol == symbol.replace("/", ""):
-                side = pos.get("side", "")
-                if side == "long" and current_trend == -1:
-                    final_signal = "close_long"
-                    reason = "Đóng LONG: Custom SMA báo Trend Giảm"
-                elif side == "short" and current_trend == 1:
-                    final_signal = "close_short"
-                    reason = "Đóng SHORT: Custom SMA báo Trend Tăng"
-
-        # Tạo siêu dữ liệu (metadata) để gửi ra frontend vẽ biểu đồ
-        trend_plot_val = high_bound[-1] if current_trend == 1 else low_bound[-1] if current_trend == -1 else None
-        trend_plot_color = "blue" if current_trend == 1 else "yellow"
-        
-        sma_line_color = "yellow"
-        if len(basis) >= 2 and not pd.isna(basis.iloc[-2]):
-            if current_sma > prev_sma:
-                sma_line_color = "blue"
-            elif current_sma < prev_sma:
-                sma_line_color = "red"
-                
-        momentum_color = "yellow"
-        if "Đỏ" in momentum_state: momentum_color = "red"
-        elif "Cam" in momentum_state: momentum_color = "orange"
-        elif "Xanh dương" in momentum_state: momentum_color = "blue"
-        elif "Xanh lá" in momentum_state: momentum_color = "green"
-        elif "Tím" in momentum_state: momentum_color = "purple"
-
-        momentum_n_color = "yellow"
-        if "Đỏ" in momentum_n_state: momentum_n_color = "red"
-        elif "Cam" in momentum_n_state: momentum_n_color = "orange"
-        elif "Xanh dương" in momentum_n_state: momentum_n_color = "blue"
-        elif "Xanh lá" in momentum_n_state: momentum_n_color = "green"
-        elif "Tím" in momentum_n_state: momentum_n_color = "purple"
-
-        metadata = {
-            "plots": [
-                {
-                    "name": "trend",
-                    "value": float(trend_plot_val) if trend_plot_val is not None else None,
-                    "color": trend_plot_color,
-                    "style": "circles",
-                    "linewidth": 1
-                },
-                {
-                    "name": "SMA",
-                    "value": float(current_sma) if not pd.isna(current_sma) else None,
-                    "color": sma_line_color,
-                    "style": "line",
-                    "linewidth": 2
-                },
-                {
-                    "name": "SMA-1",
-                    "value": float(current_sma) if not pd.isna(current_sma) else None,
-                    "color": momentum_color,
-                    "style": "cross",
-                    "linewidth": 3,
-                    "tooltip": momentum_state
-                },
-                {
-                    "name": f"SMA-{n}",
-                    "value": float(current_sma) if not pd.isna(current_sma) else None,
-                    "color": momentum_n_color,
-                    "style": "cross",
-                    "linewidth": 5,
-                    "tooltip": f"[{n}p] {momentum_n_state} ({momentum_n_pct:.4f}%)"
-                }
-            ],
-            "bands": {
-                "center_line": float(center_line_arr[-1]) if not pd.isna(center_line_arr[-1]) else None,
-                "band_up": float(band_up_arr[-1]) if not pd.isna(band_up_arr[-1]) else None,
-                "band_dn": float(band_dn_arr[-1]) if not pd.isna(band_dn_arr[-1]) else None
-            },
-            "extra_info": {
-                "slope_pct": round(sma_slope_pct, 4) if 'sma_slope_pct' in locals() else 0.0,
-                "momentum_pct": round(momentum_pct, 4) if 'momentum_pct' in locals() else 0.0,
-                "momentum_n_pct": round(momentum_n_pct, 4) if 'momentum_n_pct' in locals() else 0.0,
-                "momentum_n": n
+        try:
+            df = add_custom_sma_to_df(
+                df.copy(),
+                fast_len=self.fast_length,
+                slow_len=self.slow_length,
+                len_c=self.signal_length,
+                factor=self.trend_factor,
+                bb_length=self.bb_length,
+                bb_mult=self.bb_mult,
+                momentum_n=self.momentum_n,
+            )
+            trend    = int(df["custom_sma_trend"].iloc[-1])
+            prev_t   = int(df["custom_sma_trend"].iloc[-2])
+            momentum = str(df["custom_sma_momentum"].iloc[-1])
+            slope    = float(df["custom_sma_slope_pct"].iloc[-1])
+            mom_pct  = float(df["custom_sma_momentum_pct"].iloc[-1])
+            mom_n    = str(df["custom_sma_momentum_n"].iloc[-1])
+            mom_n_pct = float(df["custom_sma_momentum_n_pct"].iloc[-1])
+            return {
+                "trend":          trend,
+                "prev_trend":     prev_t,
+                "momentum":       momentum,
+                "slope_pct":      round(slope, 4),
+                "momentum_pct":   round(mom_pct, 4),
+                "momentum_n":     mom_n,
+                "momentum_n_pct": round(mom_n_pct, 4),
             }
-        }
+        except Exception as exc:
+            logger.debug(f"[CustomSMA] prepare_metadata loi: {exc}")
+            return {}
 
+    # ── analyze (BaseStrategy contract) ──────────────────────────────────────
+
+    async def analyze(
+        self,
+        symbol:            str,
+        ohlcv_data:        list,
+        current_positions: list,
+    ) -> StrategySignal:
+        """Phan tich OHLCV va tra ve StrategySignal.
+
+        Args:
+            symbol: Symbol giao dich (vd: "BTC/USDT").
+            ohlcv_data: List [[timestamp_ms, open, high, low, close, volume], ...].
+            current_positions: List vi the dang mo tu exchange.
+
+        Returns:
+            StrategySignal voi signal, price, reason, metadata.
+        """
+        min_len = max(self.slow_length, self.signal_length) * 2
+        if len(ohlcv_data) < min_len:
+            return StrategySignal(
+                signal="none", symbol=symbol, price=0,
+                reason=f"Khong du du lieu: co {len(ohlcv_data)}, can >={min_len}",
+            )
+
+        df = self._to_dataframe(ohlcv_data)
+
+        # Tinh tat ca indicators qua add_custom_sma_to_df (tai su dung tu indicators.py)
+        df = add_custom_sma_to_df(
+            df,
+            fast_len=self.fast_length,
+            slow_len=self.slow_length,
+            len_c=self.signal_length,
+            factor=self.trend_factor,
+            bb_length=self.bb_length,
+            bb_mult=self.bb_mult,
+            momentum_n=self.momentum_n,
+        )
+
+        # Kiem tra du lieu hop le
+        if df["custom_sma_trend"].isna().all():
+            return StrategySignal(
+                signal="none", symbol=symbol, price=0,
+                reason="Khong du du lieu hop le de tinh trend",
+            )
+
+        current_trend = int(df["custom_sma_trend"].iloc[-1])
+        prev_trend    = int(df["custom_sma_trend"].iloc[-2])
+        current_price = float(df["close"].iloc[-1])
+
+        # Lay momentum info de build reason va metadata
+        mom_info = self._extract_momentum_info(df)
+
+        # Uu tien: kiem tra exit truoc
+        exit_signal = self._check_exit(symbol, current_trend, current_price, current_positions, mom_info)
+        if exit_signal is not None:
+            return exit_signal
+
+        # Kiem tra entry
+        entry_signal = self._check_entry(
+            symbol, current_trend, prev_trend, current_price, mom_info
+        )
+        if entry_signal is not None:
+            return entry_signal
+
+        # Khong co tin hieu
+        reason = (
+            f"Cho tin hieu | Trend={current_trend} | "
+            f"Mom(1): {mom_info['momentum']} ({mom_info['momentum_pct']:.4f}%) | "
+            f"Mom({self.momentum_n}): {mom_info['momentum_n']} ({mom_info['momentum_n_pct']:.4f}%) | "
+            f"Doc: {mom_info['slope_pct']:.4f}%"
+        )
         return StrategySignal(
-            signal=final_signal,
+            signal="none",
             symbol=symbol,
             price=current_price,
             reason=reason,
-            metadata=metadata
+            metadata=self._build_metadata(df, current_trend, mom_info),
         )
+
+    # ── Entry / Exit helpers ──────────────────────────────────────────────────
+
+    def _check_entry(
+        self,
+        symbol:        str,
+        current_trend: int,
+        prev_trend:    int,
+        price:         float,
+        mom_info:      dict,
+    ) -> StrategySignal | None:
+        """Kiem tra dieu kien vao lenh khi trend dao chieu.
+
+        Args:
+            symbol: Symbol giao dich.
+            current_trend: Trend hien tai (+1 / -1 / 0).
+            prev_trend: Trend phien truoc.
+            price: Gia dong cua hien tai.
+            mom_info: Dict chua slope_pct, momentum_pct, momentum_n_pct, ...
+
+        Returns:
+            StrategySignal entry hoac None.
+        """
+        slope    = mom_info["slope_pct"]
+        mom_pct  = mom_info["momentum_pct"]
+        mom_n    = mom_info["momentum_n"]
+        mom_n_pct = mom_info["momentum_n_pct"]
+        momentum = mom_info["momentum"]
+
+        # Trend dao chieu len -> LONG
+        if current_trend == 1 and prev_trend == -1:
+            if slope >= self.min_slope_pct and mom_pct >= self.min_momentum_pct:
+                reason = (
+                    f"Mo LONG: Custom SMA Trend Tang | "
+                    f"Mom(1): {momentum} ({mom_pct:.4f}%) | "
+                    f"Mom({self.momentum_n}): {mom_n} ({mom_n_pct:.4f}%) | "
+                    f"Doc: {slope:.4f}%"
+                )
+                return StrategySignal(
+                    signal="long", symbol=symbol, price=price, reason=reason
+                )
+            return StrategySignal(
+                signal="none", symbol=symbol, price=price,
+                reason=(
+                    f"Bo qua LONG: Doc hoac Gia toc khong dat nguong | "
+                    f"slope={slope:.4f}% (min={self.min_slope_pct}) | "
+                    f"mom={mom_pct:.4f}% (min={self.min_momentum_pct})"
+                ),
+            )
+
+        # Trend dao chieu xuong -> SHORT
+        if current_trend == -1 and prev_trend == 1:
+            if slope <= -self.min_slope_pct and mom_pct <= -self.min_momentum_pct:
+                reason = (
+                    f"Mo SHORT: Custom SMA Trend Giam | "
+                    f"Mom(1): {momentum} ({mom_pct:.4f}%) | "
+                    f"Mom({self.momentum_n}): {mom_n} ({mom_n_pct:.4f}%) | "
+                    f"Doc: {slope:.4f}%"
+                )
+                return StrategySignal(
+                    signal="short", symbol=symbol, price=price, reason=reason
+                )
+            return StrategySignal(
+                signal="none", symbol=symbol, price=price,
+                reason=(
+                    f"Bo qua SHORT: Doc hoac Gia toc khong dat nguong | "
+                    f"slope={slope:.4f}% (min={-self.min_slope_pct}) | "
+                    f"mom={mom_pct:.4f}% (min={-self.min_momentum_pct})"
+                ),
+            )
+
+        return None
+
+    def _check_exit(
+        self,
+        symbol:            str,
+        current_trend:     int,
+        price:             float,
+        current_positions: list,
+        mom_info:          dict,
+    ) -> StrategySignal | None:
+        """Kiem tra dieu kien dong lenh khi trend dao nguoc vi the.
+
+        Args:
+            symbol: Symbol giao dich.
+            current_trend: Trend hien tai.
+            price: Gia dong cua hien tai.
+            current_positions: List vi the dang mo.
+            mom_info: Dict momentum info.
+
+        Returns:
+            StrategySignal exit hoac None.
+        """
+        sym_clean = symbol.replace("/", "")
+        for pos in current_positions:
+            pos_sym = pos.get("symbol", "").replace("/", "")
+            if pos_sym != sym_clean:
+                continue
+            side = pos.get("side", "")
+            if side == "long" and current_trend == -1:
+                return StrategySignal(
+                    signal="close_long", symbol=symbol, price=price,
+                    reason="Dong LONG: Custom SMA Trend Giam",
+                )
+            if side == "short" and current_trend == 1:
+                return StrategySignal(
+                    signal="close_short", symbol=symbol, price=price,
+                    reason="Dong SHORT: Custom SMA Trend Tang",
+                )
+        return None
+
+    # ── Data helpers ──────────────────────────────────────────────────────────
+
+    def _extract_momentum_info(self, df: pd.DataFrame) -> dict:
+        """Lay cac gia tri momentum tu DataFrame da tinh indicators.
+
+        Args:
+            df: DataFrame sau khi da chay add_custom_sma_to_df.
+
+        Returns:
+            Dict chua slope_pct, momentum_pct, momentum, momentum_n, momentum_n_pct.
+        """
+        try:
+            return {
+                "slope_pct":      float(df["custom_sma_slope_pct"].iloc[-1]),
+                "momentum_pct":   float(df["custom_sma_momentum_pct"].iloc[-1]),
+                "momentum":       str(df["custom_sma_momentum"].iloc[-1]),
+                "momentum_n":     str(df["custom_sma_momentum_n"].iloc[-1]),
+                "momentum_n_pct": float(df["custom_sma_momentum_n_pct"].iloc[-1]),
+                "basis":          float(df["custom_sma_basis"].iloc[-1]),
+                "basis_prev":     float(df["custom_sma_basis"].iloc[-2]),
+            }
+        except Exception:
+            return {
+                "slope_pct": 0.0, "momentum_pct": 0.0,
+                "momentum": "yellow", "momentum_n": "yellow",
+                "momentum_n_pct": 0.0, "basis": 0.0, "basis_prev": 0.0,
+            }
+
+    def _build_metadata(
+        self,
+        df:            pd.DataFrame,
+        current_trend: int,
+        mom_info:      dict,
+    ) -> dict:
+        """Tong hop metadata de hien thi tren dashboard va luu DB.
+
+        Args:
+            df: DataFrame sau khi da tinh indicators.
+            current_trend: Trend hien tai (+1 / -1 / 0).
+            mom_info: Dict momentum info tu _extract_momentum_info.
+
+        Returns:
+            Dict metadata day du.
+        """
+        trend_color = "blue" if current_trend == 1 else "yellow"
+        basis       = mom_info["basis"]
+        basis_prev  = mom_info["basis_prev"]
+        momentum    = mom_info["momentum"]
+
+        sma_color = "yellow"
+        if basis > basis_prev:
+            sma_color = "blue"
+        elif basis < basis_prev:
+            sma_color = "red"
+
+        mom_color = _momentum_to_color(momentum)
+        mom_n_color = _momentum_to_color(mom_info["momentum_n"])
+
+        band_up  = float(df["custom_sma_up"].iloc[-1])
+        band_dn  = float(df["custom_sma_dn"].iloc[-1])
+        trend_val = band_up if current_trend == 1 else band_dn
+
+        return {
+            "trend":          current_trend,
+            "prev_trend":     int(df["custom_sma_trend"].iloc[-2]),
+            "slope_pct":      round(mom_info["slope_pct"], 4),
+            "momentum_pct":   round(mom_info["momentum_pct"], 4),
+            "momentum_n_pct": round(mom_info["momentum_n_pct"], 4),
+            "is_sideway":     current_trend == 0,
+            "plots": [
+                {
+                    "name": "trend",
+                    "value": float(trend_val),
+                    "color": trend_color,
+                    "style": "circles",
+                    "linewidth": 1,
+                },
+                {
+                    "name": "SMA",
+                    "value": float(basis) if not np.isnan(basis) else None,
+                    "color": sma_color,
+                    "style": "line",
+                    "linewidth": 2,
+                },
+                {
+                    "name": "SMA-1",
+                    "value": float(basis) if not np.isnan(basis) else None,
+                    "color": mom_color,
+                    "style": "cross",
+                    "linewidth": 3,
+                    "tooltip": momentum,
+                },
+                {
+                    "name": f"SMA-{self.momentum_n}",
+                    "value": float(basis) if not np.isnan(basis) else None,
+                    "color": mom_n_color,
+                    "style": "cross",
+                    "linewidth": 5,
+                    "tooltip": (
+                        f"[{self.momentum_n}p] {mom_info['momentum_n']} "
+                        f"({mom_info['momentum_n_pct']:.4f}%)"
+                    ),
+                },
+            ],
+            "bands": {
+                "band_up": float(band_up) if not np.isnan(band_up) else None,
+                "band_dn": float(band_dn) if not np.isnan(band_dn) else None,
+            },
+        }
+
+    @staticmethod
+    def _to_dataframe(ohlcv_data: list) -> pd.DataFrame:
+        """Chuyen list OHLCV sang DataFrame voi kieu float.
+
+        Args:
+            ohlcv_data: List [[ts_ms, o, h, l, c, v], ...].
+
+        Returns:
+            DataFrame voi columns [timestamp, open, high, low, close, volume].
+        """
+        df = pd.DataFrame(
+            ohlcv_data,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        return df.astype({
+            "open": float, "high": float, "low": float,
+            "close": float, "volume": float,
+        })
+
+
+# ── Module-level helper ───────────────────────────────────────────────────────
+
+def _momentum_to_color(momentum_state: str) -> str:
+    """Chuyen momentum state string sang color string cho dashboard.
+
+    Args:
+        momentum_state: Gia tri tu custom_sma_momentum column
+                        (vd: "blue", "red", "orange", ...).
+
+    Returns:
+        Color string tuong ung.
+    """
+    color_map = {
+        "red":    "red",
+        "orange": "orange",
+        "blue":   "blue",
+        "green":  "green",
+        "purple": "purple",
+    }
+    state_lower = momentum_state.lower()
+    for key, color in color_map.items():
+        if key in state_lower:
+            return color
+    return "yellow"

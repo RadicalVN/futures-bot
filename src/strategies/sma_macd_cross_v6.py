@@ -101,20 +101,59 @@ def _find_signal_phase_start(df: pd.DataFrame, current_sig_color: str) -> int:
 class SmaMacdCrossV6Strategy(BaseStrategy):
     """
     Chiến lược SMA + MACD Cross + ADX Filter — V6.
-
-    Tham số mới so với V1:
-    - adx_period (int)           : Chu kỳ ADX, mặc định 14
-    - adx_entry_threshold (float): Ngưỡng ADX để VÀO lệnh (env ADX_ENTRY_THRESHOLD, mặc định 25)
-    - adx_exit_threshold (float) : Ngưỡng ADX để ĐÓNG lệnh (env ADX_EXIT_THRESHOLD, mặc định 25)
-
-    Tham số kế thừa từ V1:
-    - fast_len, slow_len, len_c, factor, bb_length
-    - macd_fast, macd_slow, macd_signal_length, macd_src, macd_sig_type
+    ...
     """
+
+    STRATEGY_NAME = "sma_macd_cross_v6"
+    requires_one_shot_check = True
+
+    @classmethod
+    def get_required_lookback(cls, parameters: dict) -> int:
+        signal_len = int(parameters.get("macd_signal_length", 500))
+        bb_length  = int(parameters.get("bb_length",          200))
+        adx_period = int(parameters.get("adx_period",          14))
+        return max(signal_len, bb_length, adx_period * 2) + 50
+
+    async def prepare_metadata(self, df: "pd.DataFrame") -> dict:
+        """Tính Custom SMA + Custom MACD + ADX cho exit condition check."""
+        try:
+            df = add_custom_sma_to_df(
+                df, fast_len=self.fast_len, slow_len=self.slow_len,
+                len_c=self.len_c, factor=self.factor, bb_length=self.bb_length,
+            )
+            df = add_custom_macd_to_df(
+                df, fast=self.macd_fast, slow=self.macd_slow,
+                signal_length=self.macd_signal_length,
+                src=self.macd_src, sig_type=self.macd_sig_type,
+            )
+            df = add_adx_to_df(df, period=self.adx_period)
+            ma_arr  = df["custom_sma_basis"].to_numpy()
+            sig_arr = df["custom_macd_signal"].to_numpy()
+            mac_arr = df["custom_macd"].to_numpy()
+            i = len(df) - 1
+            return {
+                "ma_color":    _slope_color(ma_arr[i],  ma_arr[i-1],  ma_arr[i-2]),
+                "sig_color":   _slope_color(sig_arr[i], sig_arr[i-1], sig_arr[i-2]),
+                "macd_color":  _slope_color(mac_arr[i], mac_arr[i-1], mac_arr[i-2]),
+                "ma":          float(ma_arr[i]),
+                "macd":        float(mac_arr[i]),
+                "macd_signal": float(sig_arr[i]),
+                "close":       float(df["close"].iloc[-1]),
+                "high":        float(df["high"].iloc[-1]),
+                "low":         float(df["low"].iloc[-1]),
+                "adx":         float(df["adx"].iloc[-1]),
+                "adx_entry_threshold": self.adx_entry_threshold,
+                "adx_exit_threshold":  self.adx_exit_threshold,
+                "trend":       int(df["custom_sma_trend"].iloc[-1]),
+                "prev_trend":  int(df["custom_sma_trend"].iloc[-2]),
+                "momentum":    str(df["custom_sma_momentum"].iloc[-1]),
+                "slope_pct":   float(df["custom_sma_slope_pct"].iloc[-1]),
+            }
+        except Exception:
+            return {}
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.name = "sma_macd_cross_v6"
         # SMA params
         self.fast_len    = self.get_param("fast_len", 1)
         self.slow_len    = self.get_param("slow_len", 5)

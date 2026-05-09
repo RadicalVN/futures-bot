@@ -23,20 +23,36 @@ MOMENTUM_STRONG_BEAR = {"red"}         # Bắt đầu tăng tốc xuống mạnh
 class SmaPullbackStrategy(BaseStrategy):
     """
     Chiến lược 2: Bắt Đáy Sóng Hồi (Pullback Buy/Sell)
-
-    Tham số cấu hình:
-    - fast_len (int): Chu kỳ SMA nhanh, mặc định 1.
-    - slow_len (int): Chu kỳ SMA chậm, mặc định 5.
-    - len_c (int): Chu kỳ làm mượt tổng hợp, mặc định 200.
-    - factor (float): Hệ số nhiễu đảo chiều Trend, mặc định 0.05.
-    - bb_length (int): Chu kỳ SMA Bollinger cơ sở, mặc định 50.
-    - pullback_confirm_bars (int): Số nến cần xác nhận pha hồi trước khi Trigger, mặc định 2.
-    - min_slope_pct (float): Ngưỡng dốc tối thiểu khi trigger, mặc định 0.0.
+    ...
     """
+
+    STRATEGY_NAME = "sma_pullback"
+
+    @classmethod
+    def get_required_lookback(cls, parameters: dict) -> int:
+        len_c     = int(parameters.get("len_c",      200))
+        bb_length = int(parameters.get("bb_length",   50))
+        confirm   = int(parameters.get("pullback_confirm_bars", 2))
+        return max(len_c, bb_length) + confirm + 5
+
+    async def prepare_metadata(self, df: "pd.DataFrame") -> dict:
+        """Trả về trend, momentum, slope_pct cho exit condition check."""
+        try:
+            df = add_custom_sma_to_df(
+                df, fast_len=self.fast_len, slow_len=self.slow_len,
+                len_c=self.len_c, factor=self.factor, bb_length=self.bb_length,
+            )
+            slope_pct = float(df["custom_sma_slope_pct"].iloc[-1])
+            return {
+                "trend":    int(df["custom_sma_trend"].iloc[-1]),
+                "momentum": str(df["custom_sma_momentum"].iloc[-1]),
+                "slope_pct": slope_pct,
+            }
+        except Exception:
+            return {}
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.name = "sma_pullback"
         self.fast_len = self.get_param("fast_len", 1)
         self.slow_len = self.get_param("slow_len", 5)
         self.len_c = self.get_param("len_c", 200)

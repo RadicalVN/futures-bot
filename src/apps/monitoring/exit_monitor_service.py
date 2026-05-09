@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-import pandas as pd
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -43,6 +42,7 @@ from src.core.discord_notifier import (
 from src.core.exchange import BinanceExchange, create_exchange_from_account
 from src.core.exit_monitor import _check_exit_condition
 from src.core.scheduler import JobConfig, SchedulerRegistry
+from src.strategies.factory import StrategyFactory
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount, Trade
 
@@ -193,134 +193,30 @@ def _calculate_realized_pnl(
     )
 
 
-# ── Strategy factory ──────────────────────────────────────────────────────────
-
-def _build_strategy(strategy_name: str, parameters: dict):
-    """Khởi tạo Strategy instance từ tên và tham số.
-
-    Đây là factory function tập trung — mirror với logic trong BotEngine.initialize().
-    Trả về None nếu strategy_name không được hỗ trợ (log warning, không raise).
-
-    Args:
-        strategy_name: Tên chiến lược (vd: "sma_macd_cross", "adts").
-        parameters: Dict tham số của chiến lược từ Bot.parameters.
-
-    Returns:
-        Strategy instance hoặc None nếu không hỗ trợ.
-    """
-    try:
-        if strategy_name == "sma_trend_early_exit":
-            from src.strategies.sma_trend_early_exit import SmaTrendEarlyExitStrategy
-            return SmaTrendEarlyExitStrategy(parameters)
-        if strategy_name == "sma_pullback":
-            from src.strategies.sma_pullback import SmaPullbackStrategy
-            return SmaPullbackStrategy(parameters)
-        if strategy_name == "sma_anti_sideway":
-            from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
-            return SmaAntiSidewayStrategy(parameters)
-        if strategy_name in (
-            "sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3",
-            "sma_macd_cross_v4", "sma_macd_cross_v5",
-        ):
-            from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
-            return SmaMacdCrossStrategy(parameters)
-        if strategy_name == "adts":
-            from src.strategies.adts import ADTSStrategy
-            return ADTSStrategy(parameters)
-        if strategy_name == "ma_macd":
-            from src.strategies.ma_macd import MaMacdStrategy
-            return MaMacdStrategy(parameters)
-        if strategy_name == "custom_sma":
-            from src.strategies.custom_sma import CustomSMAStrategy
-            return CustomSMAStrategy(parameters)
-    except Exception as exc:
-        logger.warning(
-            f"[ExitMonitorService] Không thể khởi tạo strategy '{strategy_name}': {exc}"
-        )
-    return None
-
-
-# ── Metadata builder ──────────────────────────────────────────────────────────
-
-def _build_sma_macd_meta(df: pd.DataFrame, parameters: dict) -> dict:
-    """Tính toán metadata MACD + MA color cho chiến lược sma_macd_cross.
-
-    Được tách ra để giữ ``_fetch_exit_meta`` dưới 50 dòng.
-
-    Args:
-        df: DataFrame OHLCV đã có cột custom_sma_basis.
-        parameters: Tham số bot (macd_fast, macd_slow, macd_signal_length, ...).
-
-    Returns:
-        Dict chứa ma_color, sig_color, macd_color, ma, macd, macd_signal, close, high, low.
-        Trả về dict rỗng nếu tính toán thất bại.
-    """
-    try:
-        from src.data.indicators import add_custom_macd_to_df
-
-        df = add_custom_macd_to_df(
-            df,
-            fast=parameters.get("macd_fast", 12),
-            slow=parameters.get("macd_slow", 26),
-            signal_length=parameters.get("macd_signal_length", 500),
-            src=parameters.get("macd_src", "EMA"),
-            sig_type=parameters.get("macd_sig_type", "EMA"),
-        )
-
-        def _slope_color(curr: float, prev: float, prev2: float) -> str:
-            """Xác định màu slope: blue/green (tăng) hoặc red/orange (giảm)."""
-            if curr == prev:
-                return "yellow"
-            diff = curr - prev
-            prev_diff = prev - prev2
-            if curr > prev:
-                return "blue" if diff >= prev_diff else "green"
-            return "red" if diff <= prev_diff else "orange"
-
-        ma_arr  = df["custom_sma_basis"].to_numpy()
-        sig_arr = df["custom_macd_signal"].to_numpy()
-        mac_arr = df["custom_macd"].to_numpy()
-        i = len(df) - 1
-
-        return {
-            "ma_color":    _slope_color(ma_arr[i],  ma_arr[i - 1],  ma_arr[i - 2]),
-            "sig_color":   _slope_color(sig_arr[i], sig_arr[i - 1], sig_arr[i - 2]),
-            "macd_color":  _slope_color(mac_arr[i], mac_arr[i - 1], mac_arr[i - 2]),
-            "ma":          float(ma_arr[i]),
-            "macd":        float(mac_arr[i]),
-            "macd_signal": float(sig_arr[i]),
-            "close":       float(df["close"].iloc[-1]),
-            "high":        float(df["high"].iloc[-1]),
-            "low":         float(df["low"].iloc[-1]),
-        }
-    except Exception as exc:
-        logger.debug(f"[ExitMonitorService] _build_sma_macd_meta lỗi: {exc}")
-        return {}
-
+# ── Metadata via strategy.prepare_metadata() ─────────────────────────────────
 
 async def _fetch_exit_meta(
-    exchange: BinanceExchange,
-    symbol: str,
-    timeframe: str,
+    exchange:      BinanceExchange,
+    symbol:        str,
+    timeframe:     str,
     strategy_name: str,
-    parameters: dict,
+    parameters:    dict,
 ) -> tuple[float, dict]:
-    """Fetch OHLCV và tính toán metadata cần thiết để kiểm tra exit condition.
+    """Fetch OHLCV và delegate tính indicator sang strategy.prepare_metadata().
+
+    ExitMonitorService không còn chứa bất kỳ indicator logic nào.
+    Strategy tự biết cần tính gì — đây là nguyên tắc Zero-Core-Edit.
 
     Args:
         exchange: BinanceExchange instance đã connect.
         symbol: Symbol chuẩn hóa (vd: "BTC/USDT").
         timeframe: Timeframe (vd: "5m", "1h").
-        strategy_name: Tên chiến lược để biết cần tính indicator nào.
+        strategy_name: Tên chiến lược để factory tạo instance.
         parameters: Tham số bot.
 
     Returns:
         Tuple (current_price, metadata_dict).
-        current_price = 0.0 nếu không lấy được giá.
-        metadata_dict = {} nếu không tính được indicator.
     """
-    from src.data.indicators import add_custom_sma_to_df
-
     current_price = 0.0
     meta: dict = {}
 
@@ -331,35 +227,29 @@ async def _fetch_exit_meta(
     except Exception as exc:
         logger.warning(f"[ExitMonitorService] fetch_ticker {symbol} lỗi: {exc}")
 
-    # Fetch OHLCV và tính indicator
+    # Fetch OHLCV
     try:
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, _OHLCV_LOOKBACK)
         if not ohlcv or len(ohlcv) < 10:
             return current_price, meta
 
+        import pandas as pd
         df = pd.DataFrame(
             ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
         )
-        df = add_custom_sma_to_df(df)
 
         if not current_price:
             current_price = float(df["close"].iloc[-1])
 
-        sideway_thr = parameters.get("sideway_slope_threshold", 0.01)
-        slope_pct   = float(df["custom_sma_slope_pct"].iloc[-1])
-
-        meta = {
-            "trend":        int(df["custom_sma_trend"].iloc[-1]),
-            "prev_trend":   int(df["custom_sma_trend"].iloc[-2]),
-            "momentum":     str(df["custom_sma_momentum"].iloc[-1]),
-            "slope_pct":    slope_pct,
-            "momentum_pct": float(df["custom_sma_momentum_pct"].iloc[-1]),
-            "is_sideway":   abs(slope_pct) < sideway_thr,
-        }
-
-        # Bổ sung MACD metadata cho chiến lược sma_macd_cross
-        if "sma_macd_cross" in strategy_name:
-            meta.update(_build_sma_macd_meta(df, parameters))
+        # Delegate tính indicator sang strategy — không hardcode gì ở đây
+        try:
+            strategy = StrategyFactory.create(strategy_name, parameters)
+            meta = await strategy.prepare_metadata(df)
+        except Exception as exc:
+            logger.debug(
+                f"[ExitMonitorService] prepare_metadata '{strategy_name}' lỗi: {exc}"
+            )
+            meta = {}
 
     except Exception as exc:
         logger.warning(

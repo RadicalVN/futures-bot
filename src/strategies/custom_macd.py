@@ -6,9 +6,33 @@ class CustomMACDStrategy(BaseStrategy):
     Chiến thuật dựa trên chỉ báo MACD Custom (MACD-TuanTV1008)
     """
 
+    STRATEGY_NAME = "custom_macd"
+
+    @classmethod
+    def get_required_lookback(cls, parameters: dict) -> int:
+        signal_len = int(parameters.get("signal_length", 500))
+        slow_len   = int(parameters.get("slow_length",    26))
+        return max(signal_len, slow_len) + 50
+
+    async def prepare_metadata(self, df: "pd.DataFrame") -> dict:
+        """Trả về MACD values cho exit condition check."""
+        try:
+            from src.data.indicators import add_custom_macd_to_df
+            df = add_custom_macd_to_df(
+                df,
+                fast=self.fast_length, slow=self.slow_length,
+                signal_length=self.signal_length,
+                src=self.sma_source, sig_type=self.sma_signal,
+            )
+            return {
+                "macd":        float(df["custom_macd"].iloc[-1]),
+                "macd_signal": float(df["custom_macd_signal"].iloc[-1]),
+            }
+        except Exception:
+            return {}
+
     def __init__(self, config: dict):
         super().__init__(config)
-        self.name = "custom_macd"
         self.fast_length = self.get_param("fast_length", 12)
         self.slow_length = self.get_param("slow_length", 26)
         self.signal_length = self.get_param("signal_length", 500)

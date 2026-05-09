@@ -15,23 +15,38 @@ from src.data.indicators import add_custom_sma_to_df
 class SmaAntiSidewayStrategy(BaseStrategy):
     """
     Chiến lược 3: Chống Nhiễu Sideway (Anti-Whipsaw Filter)
-
-    Tham số cấu hình:
-    - fast_len (int): Chu kỳ SMA nhanh, mặc định 1.
-    - slow_len (int): Chu kỳ SMA chậm, mặc định 5.
-    - len_c (int): Chu kỳ làm mượt tổng hợp, mặc định 200.
-    - factor (float): Hệ số nhiễu đảo chiều Trend, mặc định 0.05.
-    - bb_length (int): Chu kỳ SMA Bollinger cơ sở, mặc định 50.
-    - sideway_slope_threshold (float): Ngưỡng |% Dốc| tối thiểu để coi là thị trường ĐANG CHẠY (không sideway).
-        Nếu |slope_pct| < threshold → Bot ngủ đông. Mặc định 0.01 (%).
-    - exit_slope_threshold (float): Ngưỡng |% Dốc| để đóng lệnh sớm khi thị trường quay về tích luỹ.
-        Mặc định bằng sideway_slope_threshold.
-    - min_momentum_pct (float): Ngưỡng |% Gia tốc| tối thiểu để confirm thêm. Mặc định 0.0.
+    ...
     """
+
+    STRATEGY_NAME = "sma_anti_sideway"
+
+    @classmethod
+    def get_required_lookback(cls, parameters: dict) -> int:
+        len_c     = int(parameters.get("len_c",      200))
+        bb_length = int(parameters.get("bb_length",   50))
+        return max(len_c, bb_length) + 10
+
+    async def prepare_metadata(self, df: "pd.DataFrame") -> dict:
+        """Trả về trend, momentum, slope_pct, is_sideway cho exit check."""
+        try:
+            df = add_custom_sma_to_df(
+                df, fast_len=self.fast_len, slow_len=self.slow_len,
+                len_c=self.len_c, factor=self.factor, bb_length=self.bb_length,
+            )
+            slope_pct = float(df["custom_sma_slope_pct"].iloc[-1])
+            return {
+                "trend":      int(df["custom_sma_trend"].iloc[-1]),
+                "prev_trend": int(df["custom_sma_trend"].iloc[-2]),
+                "momentum":   str(df["custom_sma_momentum"].iloc[-1]),
+                "slope_pct":  slope_pct,
+                "is_sideway": abs(slope_pct) < self.sideway_slope_threshold,
+                "sideway_slope_threshold": self.sideway_slope_threshold,
+            }
+        except Exception:
+            return {}
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.name = "sma_anti_sideway"
         self.fast_len = self.get_param("fast_len", 1)
         self.slow_len = self.get_param("slow_len", 5)
         self.len_c = self.get_param("len_c", 200)

@@ -16,21 +16,38 @@ from .base_strategy import BaseStrategy, StrategySignal
 class MaMacdStrategy(BaseStrategy):
     """
     MA + MACD Strategy
-
-    Điều kiện BUY (Long):
-      - Fast MA vượt lên trên Slow MA (Golden Cross) HOẶC Fast MA > Slow MA
-      - MACD Line vượt lên trên Signal Line
-      - MACD > 0 (xác nhận momentum dương)
-
-    Điều kiện SELL (Short / Close):
-      - Fast MA cắt xuống dưới Slow MA (Death Cross) HOẶC Fast MA < Slow MA
-      - MACD Line cắt xuống dưới Signal Line
-      - MACD < 0
+    ...
     """
+
+    STRATEGY_NAME = "ma_macd"
+
+    @classmethod
+    def get_required_lookback(cls, parameters: dict) -> int:
+        """Lookback = max(ma_slow, macd_slow + macd_signal) + buffer."""
+        ma_slow    = int(parameters.get("ma_slow",    26))
+        macd_slow  = int(parameters.get("macd_slow",  26))
+        macd_sig   = int(parameters.get("macd_signal", 9))
+        return max(ma_slow, macd_slow + macd_sig) + 10
+
+    async def prepare_metadata(self, df: "pd.DataFrame") -> dict:
+        """Trả về MA và MACD values cho exit condition check."""
+        try:
+            from src.data.indicators import get_ma_values, get_macd_values
+            ma   = get_ma_values(df, self.ma_fast, self.ma_slow, self.ma_type)
+            macd = get_macd_values(df, self.macd_fast, self.macd_slow, self.macd_signal)
+            meta: dict = {}
+            if ma:
+                meta.update({"ma_fast": ma.fast, "ma_slow": ma.slow,
+                             "trend": 1 if ma.bullish else -1})
+            if macd:
+                meta.update({"macd": macd.macd, "macd_signal": macd.signal,
+                             "macd_histogram": macd.histogram})
+            return meta
+        except Exception:
+            return {}
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.name = "ma_macd"
 
         # MA params
         self.ma_fast = config.get("ma_fast", 12)

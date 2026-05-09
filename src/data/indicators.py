@@ -550,3 +550,213 @@ def add_bb_to_df(df: pd.DataFrame, period: int = 20, mult: float = 2.0) -> pd.Da
     df["bb_lower"]  = middle - mult * std
 
     return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADTS Indicators — Dùng chung cho mọi strategy cần ATR, EMA Slope, BBWidth
+# ══════════════════════════════════════════════════════════════════════════════
+
+def add_atr_to_df(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Tính ATR (Wilder's RMA) và thêm cột ``atr`` vào DataFrame.
+
+    Dùng chung cho mọi strategy cần ATR (ADTS, trailing stop, ...).
+    Thuật toán: True Range → Wilder's smoothing (alpha = 1/period).
+
+    Args:
+        df: DataFrame OHLCV với cột high, low, close.
+        period: Chu kỳ ATR, mặc định 14.
+
+    Returns:
+        DataFrame với cột ``atr`` được thêm vào.
+    """
+    high  = df["high"]
+    low   = df["low"]
+    close_prev = df["close"].shift(1)
+
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close_prev).abs(),
+            (low  - close_prev).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    df["atr"] = tr.ewm(alpha=1.0 / period, adjust=False).mean()
+    return df
+
+
+def add_ema_slope_to_df(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """Tính EMA và độ dốc (slope) của EMA, thêm vào DataFrame.
+
+    Thêm 2 cột:
+    - ``ema{period}``       : Giá trị EMA tại mỗi nến.
+    - ``ema{period}_slope`` : Độ dốc = EMA[i] - EMA[i-1] (tuyệt đối, không phải %).
+      Dương = đang tăng, Âm = đang giảm.
+
+    Args:
+        df: DataFrame OHLCV với cột close.
+        period: Chu kỳ EMA, mặc định 20.
+
+    Returns:
+        DataFrame với 2 cột mới được thêm vào.
+    """
+    ema = df["close"].ewm(span=period, adjust=False).mean()
+    df[f"ema{period}"]       = ema
+    df[f"ema{period}_slope"] = ema.diff(1)
+    return df
+
+
+def add_bbwidth_to_df(
+    df: pd.DataFrame,
+    period: int = 20,
+    mult: float = 2.0,
+) -> pd.DataFrame:
+    """Tính Bollinger Bands và BBWidth, thêm vào DataFrame.
+
+    Thêm 4 cột:
+    - ``bb_upper``  : Dải trên.
+    - ``bb_middle`` : Dải giữa (SMA).
+    - ``bb_lower``  : Dải dưới.
+    - ``bb_width``  : (Upper - Lower) / Middle — đo độ nén/giãn của thị trường.
+
+    Khác với ``add_bb_to_df``: thêm cột ``bb_width`` để dùng cho The Shield.
+
+    Args:
+        df: DataFrame OHLCV với cột close.
+        period: Chu kỳ SMA, mặc định 20.
+        mult: Hệ số độ lệch chuẩn, mặc định 2.0.
+
+    Returns:
+        DataFrame với 4 cột mới được thêm vào.
+    """
+    close  = df["close"]
+    middle = close.rolling(period).mean()
+    std    = close.rolling(period).std(ddof=0)
+    upper  = middle + mult * std
+    lower  = middle - mult * std
+
+    df["bb_upper"]  = upper
+    df["bb_middle"] = middle
+    df["bb_lower"]  = lower
+    df["bb_width"]  = (upper - lower) / middle
+    return df
+
+
+# ── ADTS Snapshot ─────────────────────────────────────────────────────────────
+
+@dataclass
+class ADTSSnapshot:
+    """Tất cả giá trị indicator ADTS tại nến cuối cùng.
+
+    Được trả về bởi ``build_adts_snapshot()`` và dùng trong:
+    - ``ADTSStrategy.prepare_metadata()`` → ExitMonitorService
+    - ``ADTSStrategy._evaluate_shield()`` → Entry/Exit logic
+    - ``ADTSStrategy._check_emergency_exit()`` → Emergency Exit
+
+    Attributes:
+        close, high, low: Giá nến hiện tại.
+        atr: ATR(period) — dùng cho SL/TP động.
+        adx: ADX(period) — The Shield condition 1.
+        bb_width: BBWidth(period, std) — The Shield condition 2.
+        ema20: EMA(ema_period) — Entry signal.
+        ema20_slope: Độ dốc EMA — The Shield condition 3.
+        ema200: EMA(ema200_period) — Trend Filter.
+        close_prev: Giá đóng nến trước (để kiểm tra cross).
+        ema20_prev: EMA nến trước (để kiểm tra cross).
+    """
+    close:       float
+    high:        float
+    low:         float
+    atr:         float
+    adx:         float
+    bb_width:    float
+    ema20:       float
+    ema20_slope: float
+    ema200:      float
+    close_prev:  float
+    ema20_prev:  float
+
+
+def build_adts_snapshot(
+    df:            pd.DataFrame,
+    atr_period:    int   = 14,
+    adx_period:    int   = 14,
+    ema_period:    int   = 20,
+    ema200_period: int   = 200,
+    bb_period:     int   = 20,
+    bb_std:        float = 2.0,
+) -> Optional[ADTSSnapshot]:
+    """Tính toán tất cả indicators ADTS và trả về snapshot tại nến cuối.
+
+    Tái sử dụng các hàm ``add_*_to_df`` đã có trong module này.
+    Trả về None nếu không đủ dữ liệu hoặc có giá trị NaN.
+
+    Args:
+        df: DataFrame OHLCV (chưa cần có indicator columns).
+        atr_period: Chu kỳ ATR, mặc định 14.
+        adx_period: Chu kỳ ADX, mặc định 14.
+        ema_period: Chu kỳ EMA entry signal, mặc định 20.
+        ema200_period: Chu kỳ EMA trend filter, mặc định 200.
+        bb_period: Chu kỳ Bollinger Bands, mặc định 20.
+        bb_std: Hệ số std BB, mặc định 2.0.
+
+    Returns:
+        ADTSSnapshot hoặc None nếu không đủ dữ liệu.
+    """
+    min_required = max(adx_period, bb_period, ema_period, ema200_period) * 2 + 5
+    if len(df) < min_required:
+        logger.warning(
+            f"[build_adts_snapshot] Khong du du lieu: co {len(df)}, can >={min_required}"
+        )
+        return None
+
+    try:
+        # Tái sử dụng các hàm đã có — không duplicate logic
+        df = add_atr_to_df(df.copy(), atr_period)
+        df = add_adx_to_df(df, adx_period)
+        df = add_bbwidth_to_df(df, bb_period, bb_std)
+        df = add_ema_slope_to_df(df, ema_period)
+
+        # EMA200 riêng (trend filter)
+        df[f"ema{ema200_period}"] = df["close"].ewm(
+            span=ema200_period, adjust=False
+        ).mean()
+
+        # Lấy giá trị tại nến cuối
+        i = len(df) - 1
+        vals = {
+            "atr":         df["atr"].iloc[i],
+            "adx":         df["adx"].iloc[i],
+            "bb_width":    df["bb_width"].iloc[i],
+            "ema20":       df[f"ema{ema_period}"].iloc[i],
+            "ema20_slope": df[f"ema{ema_period}_slope"].iloc[i],
+            "ema200":      df[f"ema{ema200_period}"].iloc[i],
+        }
+
+        # Kiểm tra NaN
+        for name, val in vals.items():
+            if np.isnan(float(val)):
+                logger.warning(f"[build_adts_snapshot] {name} = NaN, bo qua")
+                return None
+
+        return ADTSSnapshot(
+            close=float(df["close"].iloc[i]),
+            high=float(df["high"].iloc[i]),
+            low=float(df["low"].iloc[i]),
+            atr=float(vals["atr"]),
+            adx=float(vals["adx"]),
+            bb_width=float(vals["bb_width"]),
+            ema20=float(vals["ema20"]),
+            ema20_slope=float(vals["ema20_slope"]),
+            ema200=float(vals["ema200"]),
+            close_prev=float(df["close"].iloc[i - 1]),
+            ema20_prev=float(df[f"ema{ema_period}"].iloc[i - 1]),
+        )
+
+    except Exception as exc:
+        logger.error(
+            f"[build_adts_snapshot] Loi tinh indicator: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None

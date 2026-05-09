@@ -10,18 +10,7 @@ from src.core.order_manager import OrderManager
 from src.core.risk_manager import RiskManager
 from src.core.bot_logger import BotLogger
 from src.core.exit_monitor import ExitMonitor
-from src.strategies.ma_macd import MaMacdStrategy
-from src.strategies.custom_sma import CustomSMAStrategy
-from src.strategies.custom_macd import CustomMACDStrategy
-from src.strategies.sma_trend_early_exit import SmaTrendEarlyExitStrategy
-from src.strategies.sma_pullback import SmaPullbackStrategy
-from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
-from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
-from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
-from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
-from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
-from src.strategies.sma_macd_cross_v5 import SmaMacdCrossV5Strategy
-from src.strategies.adts import ADTSStrategy
+from src.strategies.factory import StrategyFactory
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount
 
@@ -212,65 +201,18 @@ class BotEngine:
         else:
             self.target_symbols = self.symbols_config
 
-        # Init Strategy
-        if self.strategy_name == "ma_macd":
-            self.strategy = MaMacdStrategy(self.parameters)
-        elif self.strategy_name == "custom_sma":
-            self.strategy = CustomSMAStrategy(self.parameters)
-        elif self.strategy_name == "custom_macd":
-            self.lookback = max(
-                self.lookback,
-                int(self.parameters.get("signal_length", 500)) + 50,
-            )
-            self.strategy = CustomMACDStrategy(self.parameters)
-        elif self.strategy_name == "sma_trend_early_exit":
-            self.strategy = SmaTrendEarlyExitStrategy(self.parameters)
-        elif self.strategy_name == "sma_pullback":
-            self.strategy = SmaPullbackStrategy(self.parameters)
-        elif self.strategy_name == "sma_anti_sideway":
-            self.strategy = SmaAntiSidewayStrategy(self.parameters)
-        elif self.strategy_name == "sma_macd_cross":
-            # MACD signal_length có thể lên tới 500 → cần lookback lớn hơn
-            self.lookback = max(
-                self.lookback,
-                int(self.parameters.get("macd_signal_length", 500)) + 50,
-            )
-            self.strategy = SmaMacdCrossStrategy(self.parameters)
-        elif self.strategy_name == "sma_macd_cross_v2":
-            self.lookback = max(
-                self.lookback,
-                int(self.parameters.get("macd_signal_length", 500)) + 50,
-            )
-            self.strategy = SmaMacdCrossV2Strategy(self.parameters)
-        elif self.strategy_name == "sma_macd_cross_v3":
-            self.lookback = max(
-                self.lookback,
-                int(self.parameters.get("macd_signal_length", 500)) + 50,
-            )
-            self.strategy = SmaMacdCrossV3Strategy(self.parameters)
-        elif self.strategy_name == "sma_macd_cross_v4":
-            self.lookback = max(
-                self.lookback,
-                int(self.parameters.get("macd_signal_length", 500)) + 50,
-            )
-            self.strategy = SmaMacdCrossV4Strategy(self.parameters)
-        elif self.strategy_name == "sma_macd_cross_v5":
-            self.lookback = max(
-                self.lookback,
-                int(self.parameters.get("macd_signal_length", 500)) + 50,
-            )
-            self.strategy = SmaMacdCrossV5Strategy(self.parameters)
-        elif self.strategy_name == "adts":
-            # ADTS cần đủ dữ liệu cho BBWidth SMA(200) + ATR(14) + ADX(14)
-            # Thêm buffer để resample D1 có đủ ngày
-            adts_lookback = max(
-                self.lookback,
-                int(self.parameters.get("bbwidth_sma_period", 200)) * 10 + 100,
-            )
-            self.lookback = adts_lookback
-            self.strategy = ADTSStrategy(self.parameters)
-        else:
-            raise ValueError(f"Chiến thuật không hỗ trợ: {self.strategy_name}")
+        # ── Init Strategy via StrategyFactory ────────────────────────────────
+        # Factory tự động tìm strategy theo tên — không cần if/elif.
+        # Strategy tự tính lookback cần thiết qua get_required_lookback().
+        self.strategy = StrategyFactory.create(self.strategy_name, self.parameters)
+        self.lookback = max(
+            self.lookback,
+            self.strategy.get_required_lookback(self.parameters),
+        )
+        self.log.info(
+            f"Strategy '{self.strategy_name}' loaded via factory "
+            f"| lookback={self.lookback}"
+        )
 
         # Risk Manager
         self.risk_manager = RiskManager(self.parameters)
@@ -621,9 +563,9 @@ class BotEngine:
                     await self._save_entry_opportunity(signal, effective_max, open_symbols)
 
                 # ── One-shot check: chỉ vào 1 lệnh mỗi phase Signal ──────────
-                # Áp dụng cho sma_macd_cross: mỗi phase Signal bullish/bearish
-                # chỉ được vào 1 lệnh duy nhất.
-                if signal.is_entry and self.strategy_name == "sma_macd_cross":
+                # Áp dụng cho strategy có requires_one_shot_check=True.
+                # Không còn hardcode tên strategy — strategy tự khai báo.
+                if signal.is_entry and self.strategy.requires_one_shot_check:
                     blocked, block_reason = await self._check_one_shot_phase(
                         signal, trading_symbol
                     )
