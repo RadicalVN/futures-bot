@@ -87,6 +87,12 @@ async def main():
     from src.apps.monitoring import setup_health_check_job
     setup_health_check_job(scheduler)
 
+    # ── Đăng ký Analytics weekly report job ──────────────────────────────────
+    # Tính metrics hieu suat (PnL, Win-rate, Profit Factor, Max Drawdown)
+    # va gui bao cao tong hop len Discord moi 7 ngay.
+    from src.apps.analytics import setup_analytics_job
+    setup_analytics_job(scheduler)
+
     bot_manager = BotManager()
     
     # Delayed import to avoid circular dependencies
