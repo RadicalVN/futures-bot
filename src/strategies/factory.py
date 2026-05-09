@@ -297,6 +297,57 @@ class StrategyFactory:
         }
 
     @staticmethod
+    def get_strategy_manifest(name: str) -> dict:
+        """Tra ve manifest day du cua mot strategy theo ten.
+
+        Manifest bao gom STRATEGY_NAME va PARAMETERS_SCHEMA — du de
+        Dashboard render form nhap tham so ma khong can biet strategy cu the.
+
+        Args:
+            name: STRATEGY_NAME cua strategy (vd: "adts", "ma_macd").
+
+        Returns:
+            Dict voi keys: ``name``, ``parameters_schema``.
+
+        Raises:
+            ValueError: Neu strategy_name khong ton tai trong registry.
+
+        Example:
+            manifest = StrategyFactory.get_strategy_manifest("adts")
+            # manifest["parameters_schema"]["properties"]["adx_threshold"]
+            # → {"type": "number", "default": 20.0, "ui:widget": "number", ...}
+        """
+        cls = StrategyFactory.get_strategy_class(name)
+        return {
+            "name":              cls.STRATEGY_NAME,
+            "parameters_schema": cls.PARAMETERS_SCHEMA,
+        }
+
+    @staticmethod
+    def list_manifests() -> list[dict]:
+        """Tra ve manifest cua tat ca strategy da dang ky, sap xep theo ten.
+
+        Dung cho endpoint ``GET /api/strategies/manifests`` de Dashboard lay
+        toan bo danh sach strategy kem schema trong 1 request.
+
+        Returns:
+            List[dict] moi phan tu co keys: ``name``, ``parameters_schema``.
+
+        Example:
+            manifests = StrategyFactory.list_manifests()
+            for m in manifests:
+                print(m["name"], len(m["parameters_schema"].get("properties", {})))
+        """
+        StrategyFactory._ensure_registry()
+        return [
+            {
+                "name":              cls.STRATEGY_NAME,
+                "parameters_schema": cls.PARAMETERS_SCHEMA,
+            }
+            for cls in sorted(_REGISTRY.values(), key=lambda c: c.STRATEGY_NAME)
+        ]
+
+    @staticmethod
     def reset_registry() -> None:
         """Reset registry về trạng thái ban đầu.
 

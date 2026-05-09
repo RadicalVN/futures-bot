@@ -95,6 +95,46 @@ class BaseStrategy(ABC):
         STRATEGY_NAME = "sma_macd_cross_v7"
     """
 
+    PARAMETERS_SCHEMA: dict = {}
+    """JSON Schema (Draft-7 subset) mô tả các tham số của strategy.
+
+    Dùng để Dashboard tự động render form nhập liệu — không cần hardcode
+    field nào trong frontend. Mỗi property tuân theo JSON Schema chuẩn
+    với extension ``ui:widget`` để frontend biết loại input cần render.
+
+    Supported ``ui:widget`` values:
+        - ``"number"``  : <input type="number">
+        - ``"select"``  : <select> với options từ ``enum``
+        - ``"boolean"`` : <input type="checkbox">
+        - ``"text"``    : <input type="text">
+
+    Example:
+        PARAMETERS_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "timeframe": {
+                    "type": "string",
+                    "title": "Timeframe",
+                    "description": "Khung thoi gian nen",
+                    "default": "5m",
+                    "enum": ["1m","3m","5m","15m","30m","1h","4h","1d"],
+                    "ui:widget": "select",
+                },
+                "ma_fast": {
+                    "type": "integer",
+                    "title": "MA Fast Period",
+                    "description": "Chu ky MA nhanh",
+                    "default": 12,
+                    "minimum": 1,
+                    "maximum": 500,
+                    "ui:widget": "number",
+                },
+            },
+        }
+
+    Default: {} — strategy chua khai bao schema, UI dung raw JSON editor.
+    """
+
     requires_one_shot_check: bool = False
     """Bật nếu strategy chỉ cho phép 1 lệnh mỗi phase Signal.
 

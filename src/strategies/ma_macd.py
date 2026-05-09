@@ -21,6 +21,116 @@ class MaMacdStrategy(BaseStrategy):
 
     STRATEGY_NAME = "ma_macd"
 
+    PARAMETERS_SCHEMA: dict = {
+        "type": "object",
+        "properties": {
+            "timeframe": {
+                "type": "string",
+                "title": "Timeframe",
+                "description": "Khung thoi gian nen",
+                "default": "5m",
+                "enum": ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                "ui:widget": "select",
+            },
+            "ma_fast": {
+                "type": "integer",
+                "title": "MA Fast Period",
+                "description": "Chu ky MA nhanh (EMA/SMA)",
+                "default": 12,
+                "minimum": 1,
+                "maximum": 500,
+                "ui:widget": "number",
+            },
+            "ma_slow": {
+                "type": "integer",
+                "title": "MA Slow Period",
+                "description": "Chu ky MA cham (EMA/SMA)",
+                "default": 26,
+                "minimum": 2,
+                "maximum": 1000,
+                "ui:widget": "number",
+            },
+            "ma_type": {
+                "type": "string",
+                "title": "MA Type",
+                "description": "Loai duong trung binh dong",
+                "default": "EMA",
+                "enum": ["EMA", "SMA"],
+                "ui:widget": "select",
+            },
+            "macd_fast": {
+                "type": "integer",
+                "title": "MACD Fast Period",
+                "description": "Chu ky EMA nhanh cua MACD",
+                "default": 12,
+                "minimum": 1,
+                "maximum": 500,
+                "ui:widget": "number",
+            },
+            "macd_slow": {
+                "type": "integer",
+                "title": "MACD Slow Period",
+                "description": "Chu ky EMA cham cua MACD",
+                "default": 26,
+                "minimum": 2,
+                "maximum": 1000,
+                "ui:widget": "number",
+            },
+            "macd_signal": {
+                "type": "integer",
+                "title": "MACD Signal Period",
+                "description": "Chu ky Signal Line cua MACD",
+                "default": 9,
+                "minimum": 1,
+                "maximum": 100,
+                "ui:widget": "number",
+            },
+            "require_both_signals": {
+                "type": "boolean",
+                "title": "Require Both Signals",
+                "description": "Yeu cau ca MA Cross VA MACD Cross cung luc",
+                "default": True,
+                "ui:widget": "boolean",
+            },
+            "leverage": {
+                "type": "integer",
+                "title": "Leverage",
+                "description": "Don bay giao dich",
+                "default": 5,
+                "minimum": 1,
+                "maximum": 125,
+                "ui:widget": "number",
+            },
+            "position_size_pct": {
+                "type": "number",
+                "title": "Position Size (%)",
+                "description": "Ty le von moi lenh (0.0 - 1.0)",
+                "default": 0.1,
+                "minimum": 0.01,
+                "maximum": 1.0,
+                "ui:widget": "number",
+            },
+            "stop_loss_pct": {
+                "type": "number",
+                "title": "Stop Loss (%)",
+                "description": "% cat lo tinh tren gia entry",
+                "default": 0.02,
+                "minimum": 0.001,
+                "maximum": 0.5,
+                "ui:widget": "number",
+            },
+            "take_profit_pct": {
+                "type": "number",
+                "title": "Take Profit (%)",
+                "description": "% chot loi tinh tren gia entry",
+                "default": 0.04,
+                "minimum": 0.001,
+                "maximum": 1.0,
+                "ui:widget": "number",
+            },
+        },
+    }
+
     @classmethod
     def get_required_lookback(cls, parameters: dict) -> int:
         """Lookback = max(ma_slow, macd_slow + macd_signal) + buffer."""
