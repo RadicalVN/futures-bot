@@ -435,6 +435,18 @@ class ADTSStrategy(BaseStrategy):
                 "maximum": 1.0,
                 "ui:widget": "number",
             },
+            "min_confidence": {
+                "type": "number",
+                "title": "Min Confidence Score",
+                "description": "Nguong confidence toi thieu de vao lenh. "
+                               "0.5 = tat filter (vao tat ca lenh), "
+                               "1.0 = chi vao khi ADX rat manh (>= threshold + 25). "
+                               "Confidence = 0.5 + (ADX - adx_threshold) / 25 * 0.5",
+                "default": 0.6,
+                "minimum": 0.5,
+                "maximum": 1.0,
+                "ui:widget": "number",
+            },
         },
     }
 
@@ -523,6 +535,12 @@ class ADTSStrategy(BaseStrategy):
         self._emergency_adx_threshold: float = float(self.get_param("emergency_adx_threshold", 20.0))
         self._emergency_close_pct:     float = float(self.get_param("emergency_close_pct", 0.5))
 
+        # ── Entry filter ──────────────────────────────────────────────────────
+        # min_confidence = 0.5 → tắt filter (vào tất cả lệnh đủ điều kiện)
+        # min_confidence = 0.6 → chặn khi ADX < adx_threshold + 5 (mặc định)
+        # min_confidence = 1.0 → chỉ vào khi ADX >= adx_threshold + 25
+        self._min_confidence: float = float(self.get_param("min_confidence", 0.6))
+
         # ── Calibration state ─────────────────────────────────────────────────
         self._calibration: Optional[_CalibrationResult] = None
         self._calibration_lock = asyncio.Lock()
@@ -539,7 +557,8 @@ class ADTSStrategy(BaseStrategy):
             f"ADX_thr={self._adx_threshold} | "
             f"SL={self._sl_atr_mult}×ATR | "
             f"TP1=R:R1:{self._tp1_rr} | "
-            f"TP2=Trail{self._tp2_trail_atr_mult}×ATR"
+            f"TP2=Trail{self._tp2_trail_atr_mult}×ATR | "
+            f"MinConf={self._min_confidence}"
         )
 
     # ── prepare_metadata (BaseStrategy contract) ──────────────────────────────
@@ -922,6 +941,18 @@ class ADTSStrategy(BaseStrategy):
         side        = "long" if buy_condition else "short"
         entry_price = snap.close
 
+        # ── Confidence filter (ADTS-006) ──────────────────────────────────────
+        # Tính confidence trước SL/TP để early-return khi bị filter,
+        # tránh tính toán không cần thiết.
+        confidence = self._calc_confidence(snap)
+        if confidence < self._min_confidence:
+            logger.debug(
+                f"[ADTS][{symbol}] Entry blocked: "
+                f"Confidence {confidence:.2f} < {self._min_confidence:.2f} | "
+                f"ADX={snap.adx:.1f} | side={side.upper()}"
+            )
+            return None
+
         sl_distance, sl_source = self._calc_sl_distance(entry_price, snap.atr)
         tp1_distance       = sl_distance * self._tp1_rr
         tp2_trail_distance = self._tp2_trail_atr_mult * snap.atr
@@ -955,6 +986,7 @@ class ADTSStrategy(BaseStrategy):
             "atr_at_entry":      round(snap.atr, 6),
             "ema200":            round(snap.ema200, 6),
             "above_ema200":      above_ema200,
+            "confidence":        confidence,
         })
 
         return StrategySignal(
@@ -962,7 +994,7 @@ class ADTSStrategy(BaseStrategy):
             symbol=symbol,
             price=entry_price,
             reason=reason,
-            confidence=self._calc_confidence(snap),
+            confidence=confidence,
             metadata=metadata,
         )
 

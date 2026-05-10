@@ -46,6 +46,12 @@
 | | | - `register_order_state()`: đổi thành `async def`, bọc lock quanh dict write |
 | | | - `clear_order_state()`: đổi thành `async def`, bọc lock + cleanup lock sau xóa |
 | | | - `restore_order_states_from_db()`: lock per-symbol quanh từng write, I/O DB ngoài lock |
+| v1.5 | 2026-05-11 | [ADTS-006] Confidence Score Filter cho Entry Signal |
+| | | - `PARAMETERS_SCHEMA`: thêm `min_confidence` (default=0.6, range=[0.5, 1.0]) |
+| | | - `__init__()`: đọc `_min_confidence` từ config, hiển thị trong log khởi tạo |
+| | | - `_check_entry()`: tính confidence trước SL/TP (early-return), filter nếu < min_confidence |
+| | | - Log DEBUG: `"Entry blocked: Confidence X.XX < Y.YY \| ADX=... \| side=..."` |
+| | | - `confidence` ghi vào cả `StrategySignal.confidence` và `metadata["confidence"]` |
 
 ---
 
@@ -134,6 +140,7 @@ Snapshot tổng hợp tất cả giá trị tại nến cuối: `build_adts_snap
 | `tp1_rr` | float | `1.2` | 0.5 | 5.0 | Tỷ lệ R:R cho TP1 |
 | `tp1_close_pct` | float | `0.5` | 0.1 | 1.0 | Tỷ lệ % vị thế chốt tại TP1 |
 | `tp2_trail_atr_mult` | float | `2.0` | 0.5 | 10.0 | Hệ số ATR cho Trailing Stop TP2 |
+| `min_confidence` | float | `0.6` | 0.5 | 1.0 | Ngưỡng confidence tối thiểu để vào lệnh. `0.5` = tắt filter. Công thức: `0.5 + (ADX - adx_threshold) / 25 × 0.5` |
 
 ### 3.4 Emergency Exit
 
@@ -421,11 +428,16 @@ Tối ưu và đang chạy production: **5m**.
 
 ---
 
-#### [ADTS-004] Backtesting Engine chưa tích hợp
+#### [ADTS-004] ✅ RESOLVED — v1.5 (2026-05-11)
 
-**Vấn đề:** Không có backtesting engine tích hợp trong platform (Phase 4 chưa triển khai). Hiện tại dùng script `gen_backtest.py` chạy thủ công.
+**Vấn đề:** Không có backtesting engine tích hợp trong platform. Hiện tại dùng script `gen_backtest.py` chạy thủ công với các hàm `_simulate_*` hardcode theo từng strategy.
 
-**Hệ quả:** Không thể đánh giá nhanh impact của việc thay đổi tham số (ADX threshold, sl_atr_mult, tp1_rr...).
+**Giải pháp đã implement:**
+- `src/core/analytics.py`: Shared math engine — `calc_trade_metrics()`, `calc_max_drawdown_from_equity()`, `calc_sharpe_ratio()`. Dùng chung cho cả Backtest và Live Trading.
+- `src/core/backtest_engine.py`: Strategy-agnostic engine — dùng `StrategyFactory.create()`, gọi `strategy.analyze()` cho từng nến (sliding window, không pre-compute).
+- `VirtualPosition` có đầy đủ ADTS fields: `tp1_hit`, `sl_moved_to_entry`, `emergency_triggered`.
+- Hỗ trợ partial close (TP1, Emergency Exit) qua `metadata["partial_close"]`.
+- Tính PnL, commission, slippage chính xác. Metrics: Win-rate, Net PnL, MDD, Profit Factor, Sharpe Ratio.
 
 ---
 
@@ -439,11 +451,15 @@ Tối ưu và đang chạy production: **5m**.
 
 ---
 
-#### [ADTS-006] Confidence Score chưa được dùng để filter lệnh
+#### [ADTS-006] ✅ RESOLVED — v1.5 (2026-05-11)
 
 **Vấn đề:** `_calc_confidence()` tính score dựa trên ADX strength (0.5–1.0) và gắn vào `StrategySignal.confidence`, nhưng `BotEngine` chưa có logic filter lệnh theo ngưỡng confidence tối thiểu.
 
-**Giải pháp đề xuất:** Thêm tham số `min_confidence` vào `PARAMETERS_SCHEMA`. BotEngine đọc và so sánh với `signal.confidence` trước khi đặt lệnh.
+**Giải pháp đã implement:**
+- `PARAMETERS_SCHEMA`: thêm `min_confidence` (default=0.6, range=[0.5, 1.0]).
+- `__init__()`: đọc `_min_confidence` từ config.
+- `_check_entry()`: tính confidence ngay sau khi xác định side (early-return trước SL/TP), filter nếu `confidence < _min_confidence`, log DEBUG rõ ràng.
+- `confidence` ghi vào cả `StrategySignal.confidence` và `metadata["confidence"]`.
 
 ---
 
