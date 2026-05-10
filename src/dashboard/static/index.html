@@ -48,6 +48,7 @@
     <div class="nav-item" onclick="showPage('settings')">⚙️ Cài đặt</div>
     <div class="nav-item" onclick="showPage('backtest')">🧪 Backtest</div>
     <div class="nav-item" onclick="showPage('marketdata')">📦 Market Data</div>
+    <div class="nav-item" onclick="showPage('analytics')">📈 Analytics</div>
   </aside>
 
   <!-- Main Content -->
@@ -918,6 +919,50 @@
               <tbody id="mdChunksBody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: ANALYTICS -->
+    <div id="page-analytics" class="page">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <h2>📈 Performance Analytics</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span style="color:var(--text-secondary); font-size:13px;">Khoang thoi gian:</span>
+          <button class="btn analytics-period-btn btn-secondary" data-days="7"  onclick="setAnalyticsDays(7)">7 ngay</button>
+          <button class="btn analytics-period-btn btn-primary"   data-days="30" onclick="setAnalyticsDays(30)">30 ngay</button>
+          <button class="btn analytics-period-btn btn-secondary" data-days="90" onclick="setAnalyticsDays(90)">90 ngay</button>
+          <button class="btn" onclick="refreshAnalytics()" style="background:var(--bg-panel); color:var(--accent); border:1px solid var(--accent);">🔄 Lam moi</button>
+        </div>
+      </div>
+
+      <!-- Summary cards -->
+      <div class="stats-row" id="analyticsSummary" style="margin-bottom:24px;">
+        <div class="empty-state" style="grid-column:1/-1">Dang tai du lieu...</div>
+      </div>
+
+      <!-- Bot performance table -->
+      <div class="card">
+        <h3>📊 Hieu suat tung Bot</h3>
+        <div class="table-container" style="margin-top:15px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Bot</th>
+                <th>Chien luoc</th>
+                <th style="text-align:center">Tong lenh</th>
+                <th style="text-align:center">Thang / Thua</th>
+                <th style="text-align:center">Win Rate</th>
+                <th style="text-align:right">Net PnL</th>
+                <th style="text-align:center">Profit Factor</th>
+                <th style="text-align:center">Max Drawdown</th>
+                <th style="text-align:center">Avg Duration</th>
+              </tr>
+            </thead>
+            <tbody id="analyticsTableBody">
+              <tr><td colspan="9" class="empty-state">Dang tai...</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

@@ -24,12 +24,89 @@ from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
 from src.strategies.sma_macd_cross_v5 import SmaMacdCrossV5Strategy
 from src.strategies.sma_macd_cross_v6 import SmaMacdCrossV6Strategy
 from src.strategies.sma_macd_cross_v7 import SmaMacdCrossV7Strategy
-from src.strategies.adts import ADTSStrategy
-from src.strategies.adts.models import ADTSConfig
-from src.strategies.adts.scanner import run_calibration, _calculate_atr, _calculate_bbwidth
-from src.strategies.adts.indicators import (
-    calculate_adx, calculate_ema, calculate_ema_slope, calculate_atr as _calc_atr_intraday
+from src.strategies.adts_strategy import ADTSStrategy
+# ADTS helpers — migrated to src/data/indicators.py (Task 4.1)
+from src.data.indicators import (
+    add_adx_to_df,
+    add_atr_to_df,
+    add_bbwidth_to_df,
+    add_ema_slope_to_df,
+    build_adts_snapshot,
+    calculate_ema,
 )
+
+
+# ── ADTS config shim (replaces deleted ADTSConfig Pydantic model) ─────────────
+# ADTSConfig was removed when src/strategies/adts/ package was deleted in Task 4.1.
+# This lightweight dataclass reads the same keys from a parameters dict.
+
+from dataclasses import dataclass as _dc
+
+
+@_dc
+class _AdtsParams:
+    """Lightweight replacement for the deleted ADTSConfig Pydantic model.
+
+    Reads ADTS parameters from a plain dict — same keys, same defaults.
+    Used only by the backtest engine in this file.
+    """
+    atr_period:               int   = 14
+    adx_period:               int   = 14
+    ema_period:               int   = 20
+    ema200_period:            int   = 200
+    bb_period:                int   = 20
+    bb_std:                   float = 2.0
+    bbwidth_sma_period:       int   = 200
+    adx_threshold:            float = 20.0
+    bbwidth_threshold_factor: float = 1.0
+    min_slope_atr_factor:     float = 0.05
+    sl_atr_mult:              float = 1.5
+    hard_sl_pct:              float = 0.03
+    tp1_rr:                   float = 1.2
+    tp1_close_pct:            float = 0.5
+    tp2_trail_atr_mult:       float = 2.0
+    emergency_adx_threshold:  float = 20.0
+    emergency_close_pct:      float = 0.5
+    leverage:                 int   = 5
+    risk_pct:                 float = 0.01
+    min_notional:             float = 5.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "_AdtsParams":
+        """Build from a parameters dict — ignores unknown keys."""
+        fields = {f.name for f in cls.__dataclass_fields__.values()}
+        return cls(**{k: v for k, v in d.items() if k in fields})
+
+
+# Alias so existing code using ADTSConfig.from_dict() still works
+ADTSConfig = _AdtsParams
+
+
+# ── Indicator shims (replace deleted adts/indicators.py functions) ────────────
+
+def _calc_atr_intraday(df, period: int = 14):
+    """ATR series — delegates to add_atr_to_df from src/data/indicators.py."""
+    import pandas as pd
+    tmp = add_atr_to_df(df.copy(), period)
+    return tmp["atr"]
+
+
+def calculate_adx(df, period: int = 14):
+    """ADX series — delegates to add_adx_to_df from src/data/indicators.py."""
+    tmp = add_adx_to_df(df.copy(), period)
+    return tmp["adx"]
+
+
+def calculate_ema_slope(df, period: int = 20):
+    """EMA slope series — delegates to add_ema_slope_to_df."""
+    tmp = add_ema_slope_to_df(df.copy(), period)
+    return tmp[f"ema{period}_slope"]
+
+
+def _calculate_bbwidth(df, period: int = 20, std_mult: float = 2.0):
+    """BBWidth series — delegates to add_bbwidth_to_df."""
+    tmp = add_bbwidth_to_df(df.copy(), period, std_mult)
+    return tmp["bb_width"]
 router = APIRouter(prefix='/api/backtest', tags=['Backtest'])
 BACKTEST_DIR = 'data/backtest'
 # COMMISSION hằng số cũ đã được thay bằng commission_pct động trong parameters

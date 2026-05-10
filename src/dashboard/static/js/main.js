@@ -8,6 +8,7 @@ import { loadTradesPage, applyTradeFilters, resetTradeFilters } from './trades.j
 import { loadBacktestPage, runBacktest, filterBtTrades, switchBtTab, onStrategyChange, runStrategyBacktest } from './backtest.js';
 import { loadMarketDataPage, mdRefreshStatus, mdRefreshAll, mdRefreshOne, mdLoadJobs, mdShowJobDetail, mdRetryJob, mdManualRefresh } from './market_data.js';
 import { scrollChartToTrade as _scrollChartToTrade } from './backtest_chart.js';
+import { loadAnalytics, refreshAnalytics, setAnalyticsDays } from './analytics.js';
 
 // Expose handlers to window for HTML onclick attributes
 window.createBot = createBot;
@@ -50,6 +51,10 @@ window.mdLoadJobs       = mdLoadJobs;
 window.mdShowJobDetail  = mdShowJobDetail;
 window.mdRetryJob       = mdRetryJob;
 window.mdManualRefresh  = mdManualRefresh;
+
+// Analytics
+window.refreshAnalytics  = refreshAnalytics;
+window.setAnalyticsDays  = setAnalyticsDays;
 
 // Backtest chart helpers
 window.btResetZoom = function() {
@@ -98,6 +103,7 @@ window.showPage = function showPage(pageId) {
   if(pageId === 'indicators') renderIndicatorsManagement();
   if(pageId === 'backtest') loadBacktestPage();
   if(pageId === 'marketdata') loadMarketDataPage();
+  if(pageId === 'analytics') loadAnalytics();
 }
 
 // Init Application
