@@ -11,20 +11,10 @@ from loguru import logger
 from src.database.db import get_db
 from src.database.models import Bot, ExchangeAccount
 from src.core.exchange import BinanceExchange, create_exchange_from_env
-from src.strategies.ma_macd import MaMacdStrategy
-from src.strategies.custom_sma import CustomSMAStrategy
-from src.strategies.custom_macd import CustomMACDStrategy
-from src.strategies.sma_trend_early_exit import SmaTrendEarlyExitStrategy
-from src.strategies.sma_pullback import SmaPullbackStrategy
-from src.strategies.sma_anti_sideway import SmaAntiSidewayStrategy
-from src.strategies.sma_macd_cross import SmaMacdCrossStrategy
-from src.strategies.sma_macd_cross_v2 import SmaMacdCrossV2Strategy
-from src.strategies.sma_macd_cross_v3 import SmaMacdCrossV3Strategy
-from src.strategies.sma_macd_cross_v4 import SmaMacdCrossV4Strategy
-from src.strategies.sma_macd_cross_v5 import SmaMacdCrossV5Strategy
-from src.strategies.sma_macd_cross_v6 import SmaMacdCrossV6Strategy
-from src.strategies.sma_macd_cross_v7 import SmaMacdCrossV7Strategy
-from src.strategies.adts_strategy import ADTSStrategy
+# ── Strategy Factory (Zero-Core-Edit) ────────────────────────────────────────
+# Thay the 13 strategy imports + _build_strategy() if/elif chain.
+# Them strategy moi = tao 1 file .py, khong sua file nay.
+from src.strategies.factory import StrategyFactory
 # ADTS helpers — migrated to src/data/indicators.py (Task 4.1)
 from src.data.indicators import (
     add_adx_to_df,
@@ -34,6 +24,8 @@ from src.data.indicators import (
     build_adts_snapshot,
     calculate_ema,
 )
+# Analytics metrics — dung chung voi live trading (Task 4.3)
+from src.apps.analytics.service import _calc_metrics as _analytics_calc_metrics
 
 
 # ── ADTS config shim (replaces deleted ADTSConfig Pydantic model) ─────────────
@@ -181,65 +173,100 @@ def _timeframe_ms(tf):
         return 300000
 
 
-def _build_strategy(strategy_name, parameters):
-    if strategy_name == "ma_macd":
-        return MaMacdStrategy(parameters)
-    elif strategy_name == "custom_sma":
-        return CustomSMAStrategy(parameters)
-    elif strategy_name == "custom_macd":
-        return CustomMACDStrategy(parameters)
-    elif strategy_name == "sma_trend_early_exit":
-        return SmaTrendEarlyExitStrategy(parameters)
-    elif strategy_name == "sma_pullback":
-        return SmaPullbackStrategy(parameters)
-    elif strategy_name == "sma_anti_sideway":
-        return SmaAntiSidewayStrategy(parameters)
-    elif strategy_name == "sma_macd_cross":
-        return SmaMacdCrossStrategy(parameters)
-    elif strategy_name == "sma_macd_cross_v2":
-        return SmaMacdCrossV2Strategy(parameters)
-    elif strategy_name == "sma_macd_cross_v3":
-        return SmaMacdCrossV3Strategy(parameters)
-    elif strategy_name == "sma_macd_cross_v4":
-        return SmaMacdCrossV4Strategy(parameters)
-    elif strategy_name == "sma_macd_cross_v5":
-        return SmaMacdCrossV5Strategy(parameters)
-    elif strategy_name == "sma_macd_cross_v6":
-        return SmaMacdCrossV6Strategy(parameters)
-    elif strategy_name == "sma_macd_cross_v7":
-        return SmaMacdCrossV7Strategy(parameters)
-    elif strategy_name == "adts":
-        return ADTSStrategy(parameters)
-    else:
-        raise ValueError(f"Unsupported strategy: {strategy_name}")
+def _build_strategy(strategy_name: str, parameters: dict):
+    """Tao strategy instance qua StrategyFactory — Zero-Core-Edit.
+
+    Thay the chuoi if/elif 14 nhanh cu. Them strategy moi = tao 1 file .py,
+    khong can sua ham nay.
+
+    Args:
+        strategy_name: STRATEGY_NAME cua strategy.
+        parameters: Dict tham so tu Bot.parameters.
+
+    Returns:
+        Strategy instance.
+
+    Raises:
+        ValueError: Neu strategy_name khong ton tai trong registry.
+    """
+    return StrategyFactory.create(strategy_name, parameters)
 
 
-def _get_lookback(strategy_name, parameters):
+def _get_lookback(strategy_name: str, parameters: dict) -> int:
+    """Lay so nen lookback toi thieu qua strategy contract — Zero-Core-Edit.
+
+    Thay the ham cu voi 8 nhanh if/elif hardcode tung strategy.
+    Moi strategy tu tinh lookback cua no qua get_required_lookback().
+
+    Args:
+        strategy_name: STRATEGY_NAME cua strategy.
+        parameters: Dict tham so tu Bot.parameters.
+
+    Returns:
+        So nen lookback toi thieu.
+    """
     base = parameters.get("lookback_candles", 200)
-    if strategy_name == "sma_macd_cross":
-        # EMA(span=N, adjust=False) cần ~3×N nến để hội tụ đủ (sai số <1%)
-        signal_len = int(parameters.get("macd_signal_length", 500))
-        return max(base, signal_len * 3)
-    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3",
-                           "sma_macd_cross_v4", "sma_macd_cross_v5"):
-        signal_len = int(parameters.get("macd_signal_length", 500))
-        return max(base, signal_len * 3)
-    elif strategy_name == "sma_macd_cross_v7":
-        signal_len = int(parameters.get("macd_signal_length", 500))
-        bb_period  = int(parameters.get("bb_period", 20))
-        return max(base, signal_len * 3, bb_period)
-    elif strategy_name == "sma_macd_cross_v6":
-        signal_len = int(parameters.get("macd_signal_length", 500))
-        adx_period = int(parameters.get("adx_period", int(float(os.environ.get("ADX_PERIOD", 14)))))
-        adx_warmup = adx_period * 7
-        return max(base, signal_len * 3, adx_warmup)
-    elif strategy_name == "custom_macd":
-        signal_len = int(parameters.get("signal_length", 500))
-        return max(base, signal_len * 3)
-    elif strategy_name == "adts":
-        # ADTS intraday chỉ cần warmup cho ATR(14) + ADX(14) + EMA(20) + BBWidth(20)
-        return max(base, 300)
-    return base
+    try:
+        cls = StrategyFactory.get_strategy_class(strategy_name)
+        required = cls.get_required_lookback(parameters)
+        return max(base, required)
+    except ValueError:
+        # Strategy chua dang ky (vi du: strategy moi chua co trong registry)
+        logger.warning(
+            f"[Backtest] Strategy '{strategy_name}' chua co trong registry, "
+            f"dung lookback mac dinh={base}"
+        )
+        return base
+
+
+# ── MockTrade — dung voi _calc_metrics() tu Analytics Service ────────────────
+
+class _MockTrade:
+    """Lightweight mock Trade de truyen vao _calc_metrics() tu Analytics Service.
+
+    Cho phep backtest dung cung cong thuc tinh metrics voi live trading,
+    dam bao ket qua nhat quan 100%.
+
+    Attributes:
+        realized_pnl: PnL cua lenh (USDT, da tru phi).
+        created_at: Thoi diem mo lenh.
+        closed_at: Thoi diem dong lenh.
+    """
+
+    def __init__(
+        self,
+        realized_pnl: float,
+        created_at:   datetime,
+        closed_at:    datetime,
+    ) -> None:
+        self.realized_pnl = realized_pnl
+        self.created_at   = created_at
+        self.closed_at    = closed_at
+
+
+def _build_mock_trades(trades: list[dict]) -> list[_MockTrade]:
+    """Chuyen danh sach backtest trade dicts sang list _MockTrade.
+
+    Args:
+        trades: Danh sach trade dict tu simulation loop.
+                Moi dict can co: pnl, entry_time_ms, exit_time_ms.
+
+    Returns:
+        List _MockTrade de truyen vao _analytics_calc_metrics().
+    """
+    mock_trades = []
+    for t in trades:
+        pnl = float(t.get("pnl", 0.0))
+        entry_ms = t.get("entry_time_ms") or t.get("entry_ts", 0)
+        exit_ms  = t.get("exit_time_ms")  or t.get("exit_ts",  0)
+        try:
+            created_at = datetime.utcfromtimestamp(entry_ms / 1000) if entry_ms else datetime.utcnow()
+            closed_at  = datetime.utcfromtimestamp(exit_ms  / 1000) if exit_ms  else datetime.utcnow()
+        except (OSError, OverflowError, ValueError):
+            created_at = datetime.utcnow()
+            closed_at  = datetime.utcnow()
+        mock_trades.append(_MockTrade(pnl, created_at, closed_at))
+    return mock_trades
 
 
 def _normalize_symbol(symbol):
@@ -1747,23 +1774,27 @@ async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
 
     _update_progress(92, "Đang tính thống kê...")
 
-    # ── Summary stats ─────────────────────────────────────────────────────────
-    total_trades = len(trades)
-    winning = [t for t in trades if t["pnl"] > 0]
-    losing  = [t for t in trades if t["pnl"] <= 0]
-    win_count  = len(winning)
-    loss_count = len(losing)
-    win_rate = round(win_count / total_trades * 100, 2) if total_trades > 0 else 0.0
-    total_pnl = sum(t["pnl"] for t in trades)
+    # ── Summary stats — dung _calc_metrics() tu Analytics Service ────────────
+    # Cung cong thuc voi live trading → ket qua nhat quan 100%.
+    mock_trades = _build_mock_trades(trades)
+    analytics   = _analytics_calc_metrics(mock_trades)
+
+    total_trades = analytics.total_trades
+    win_count    = analytics.winning_trades
+    loss_count   = analytics.losing_trades
+    win_rate     = analytics.win_rate_pct
+    total_pnl    = analytics.net_pnl
+    gross_profit = analytics.gross_profit
+    gross_loss   = analytics.gross_loss
+    profit_factor = analytics.profit_factor if analytics.profit_factor is not None else 999.0
+    avg_win  = round(gross_profit / win_count,  4) if win_count  > 0 else 0.0
+    avg_loss = round(-gross_loss  / loss_count, 4) if loss_count > 0 else 0.0
+    largest_win  = analytics.best_trade
+    largest_loss = analytics.worst_trade
+    avg_holding  = round(
+        sum(t.get("holding_candles", 0) for t in trades) / total_trades, 1
+    ) if total_trades > 0 else 0.0
     total_return_pct = round((balance - initial_balance) / initial_balance * 100, 2)
-    gross_profit = sum(t["pnl"] for t in winning)
-    gross_loss   = abs(sum(t["pnl"] for t in losing))
-    profit_factor = round(gross_profit / gross_loss, 3) if gross_loss > 0 else 999.0
-    avg_win  = round(gross_profit / win_count, 4)  if win_count  > 0 else 0.0
-    avg_loss = round(-gross_loss / loss_count, 4)  if loss_count > 0 else 0.0
-    largest_win  = round(max((t["pnl"] for t in winning), default=0.0), 4)
-    largest_loss = round(min((t["pnl"] for t in losing),  default=0.0), 4)
-    avg_holding  = round(sum(t["holding_candles"] for t in trades) / total_trades, 1) if total_trades > 0 else 0.0
 
     # ── MDD từ Equity Curve liên tục (bao gồm unrealized PnL) ────────────────
     # Đây là MDD thực tế mà trader phải chịu đựng khi bot chạy live
@@ -2667,5 +2698,339 @@ async def download_backtest(filename: str):
         path=filepath, filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+# ── Bulk Backtest API ─────────────────────────────────────────────────────────
+
+class BulkBacktestRequest(BaseModel):
+    """Request de chay backtest hang loat tren nhieu cap tien.
+
+    Attributes:
+        strategy_name: Ten strategy (phai co trong StrategyFactory registry).
+        symbols: Danh sach cap tien (vd: ["BTCUSDT", "ETHUSDT", "TRUMPUSDT"]).
+        start_date: Ngay bat dau (YYYY-MM-DD).
+        end_date: Ngay ket thuc (YYYY-MM-DD). None = den hom nay.
+        parameters: Tham so strategy (flat dict, ghi de len default).
+        initial_balance: Von ban dau moi cap tien (USDT).
+        max_concurrent: So luong backtest chay song song toi da.
+    """
+    strategy_name:   str
+    symbols:         list[str]
+    start_date:      str
+    end_date:        Optional[str]  = None
+    parameters:      dict           = {}
+    initial_balance: float          = 10000.0
+    max_concurrent:  int            = 3
+
+
+async def _run_single_bulk(
+    symbol:          str,
+    strategy_name:   str,
+    parameters:      dict,
+    start_date:      str,
+    end_date:        Optional[str],
+    initial_balance: float,
+    semaphore:       _asyncio.Semaphore,
+) -> dict:
+    """Chay backtest cho 1 cap tien trong bulk job — co gioi han concurrency.
+
+    Dung asyncio.Semaphore de dam bao khong qua max_concurrent backtest
+    chay cung luc, tranh qua tai CPU/RAM.
+
+    Args:
+        symbol: Cap tien (vd: "BTCUSDT").
+        strategy_name: Ten strategy.
+        parameters: Tham so strategy.
+        start_date: Ngay bat dau (YYYY-MM-DD).
+        end_date: Ngay ket thuc (YYYY-MM-DD hoac None).
+        initial_balance: Von ban dau (USDT).
+        semaphore: Semaphore gioi han concurrency.
+
+    Returns:
+        Dict ket qua voi keys: symbol, status, metrics hoac error.
+    """
+    async with semaphore:
+        try:
+            # Tao StrategyBacktestRequest tuong duong
+            req = StrategyBacktestRequest(
+                strategy_name=strategy_name,
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                initial_balance=initial_balance,
+                **{k: v for k, v in parameters.items()
+                   if k in StrategyBacktestRequest.model_fields},
+            )
+            # Goi endpoint run-strategy noi bo (khong qua HTTP)
+            response = await run_strategy_backtest(req)
+            job_id = response.get("job_id")
+            if not job_id:
+                return {"symbol": symbol, "status": "error", "error": "Khong tao duoc job"}
+
+            # Poll cho den khi job xong (timeout 10 phut)
+            result = await _poll_job_until_done(job_id, timeout_seconds=600)
+            if result is None:
+                return {"symbol": symbol, "status": "error", "error": "Timeout sau 10 phut"}
+
+            if result.get("status") == "error":
+                return {
+                    "symbol": symbol,
+                    "status": "error",
+                    "error": result.get("message", "Unknown error"),
+                }
+
+            summary = (result.get("result") or {}).get("summary", {})
+            return _extract_bulk_metrics(symbol, summary)
+
+        except Exception as exc:
+            return {
+                "symbol": symbol,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+            }
+
+
+async def _poll_job_until_done(
+    job_id:          str,
+    timeout_seconds: int = 600,
+    poll_interval:   float = 1.0,
+) -> Optional[dict]:
+    """Poll job store cho den khi job hoan thanh hoac timeout.
+
+    Args:
+        job_id: ID cua job can poll.
+        timeout_seconds: Timeout toi da (giay).
+        poll_interval: Khoang cach giua cac lan poll (giay).
+
+    Returns:
+        Job dict khi done/error, hoac None neu timeout.
+    """
+    elapsed = 0.0
+    while elapsed < timeout_seconds:
+        job = _jobs.get(job_id)
+        if job and job.get("status") in ("done", "error"):
+            return job
+        await _asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+    return None
+
+
+def _extract_bulk_metrics(symbol: str, summary: dict) -> dict:
+    """Trich xuat cac chi so quan trong tu summary cua 1 backtest.
+
+    Args:
+        symbol: Cap tien.
+        summary: Summary dict tu backtest job result.
+
+    Returns:
+        Dict chua symbol, status va cac chi so hieu suat.
+    """
+    return {
+        "symbol":        symbol,
+        "status":        "done",
+        "total_trades":  summary.get("total_trades", 0),
+        "winning_trades": summary.get("winning_trades", 0),
+        "losing_trades": summary.get("losing_trades", 0),
+        "win_rate_pct":  summary.get("win_rate", 0.0),
+        "net_pnl":       summary.get("total_pnl", 0.0),
+        "profit_factor": summary.get("profit_factor", 0.0),
+        "max_drawdown_pct": summary.get("max_drawdown_pct", 0.0),
+        "total_return_pct": summary.get("total_return_pct", 0.0),
+        "sharpe_ratio":  summary.get("sharpe_ratio", 0.0),
+        "final_balance": summary.get("final_balance", 0.0),
+    }
+
+
+def _build_bulk_summary(results: list[dict]) -> dict:
+    """Tong hop ket qua tu tat ca cap tien thanh 1 summary.
+
+    Chi tinh tren cac cap tien co status='done' va co giao dich.
+
+    Args:
+        results: Danh sach ket qua tu _run_single_bulk().
+
+    Returns:
+        Dict summary voi best/worst symbol va cac chi so trung binh.
+    """
+    done = [r for r in results if r.get("status") == "done" and r.get("total_trades", 0) > 0]
+    if not done:
+        return {
+            "total_symbols":   len(results),
+            "success_symbols": 0,
+            "failed_symbols":  len([r for r in results if r.get("status") == "error"]),
+            "best_symbol":     None,
+            "worst_symbol":    None,
+            "avg_net_pnl":     0.0,
+            "avg_win_rate_pct": 0.0,
+            "avg_profit_factor": None,
+            "total_net_pnl":   0.0,
+        }
+
+    best  = max(done, key=lambda r: r.get("net_pnl", 0.0))
+    worst = min(done, key=lambda r: r.get("net_pnl", 0.0))
+    n     = len(done)
+
+    avg_pnl  = round(sum(r.get("net_pnl", 0.0) for r in done) / n, 4)
+    avg_wr   = round(sum(r.get("win_rate_pct", 0.0) for r in done) / n, 2)
+    pf_vals  = [r["profit_factor"] for r in done if r.get("profit_factor") not in (None, 0.0, 999.0)]
+    avg_pf   = round(sum(pf_vals) / len(pf_vals), 3) if pf_vals else None
+    total_pnl = round(sum(r.get("net_pnl", 0.0) for r in done), 4)
+
+    return {
+        "total_symbols":    len(results),
+        "success_symbols":  n,
+        "failed_symbols":   len([r for r in results if r.get("status") == "error"]),
+        "best_symbol":      best["symbol"],
+        "best_net_pnl":     best.get("net_pnl", 0.0),
+        "worst_symbol":     worst["symbol"],
+        "worst_net_pnl":    worst.get("net_pnl", 0.0),
+        "avg_net_pnl":      avg_pnl,
+        "avg_win_rate_pct": avg_wr,
+        "avg_profit_factor": avg_pf,
+        "total_net_pnl":    total_pnl,
+    }
+
+
+@router.post("/bulk")
+async def run_bulk_backtest(req: BulkBacktestRequest) -> dict:
+    """Chay backtest hang loat tren nhieu cap tien voi cung 1 strategy.
+
+    Dung asyncio.Semaphore de gioi han so luong backtest chay song song,
+    tranh qua tai CPU/RAM. Ket qua duoc tong hop thanh 1 summary so sanh.
+
+    Args:
+        req: BulkBacktestRequest voi strategy_name, symbols, parameters, ...
+
+    Returns:
+        Dict voi job_id, status, results (tung cap tien) va summary.
+
+    Raises:
+        HTTPException 400: Neu strategy khong hop le hoac symbols rong.
+        HTTPException 422: Neu ngay khong hop le.
+
+    Example request:
+        POST /api/backtest/bulk
+        {
+            "strategy_name": "sma_macd_cross_v7",
+            "symbols": ["BTCUSDT", "ETHUSDT", "TRUMPUSDT"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-05-01",
+            "parameters": {"macd_signal_length": 500},
+            "initial_balance": 10000,
+            "max_concurrent": 3
+        }
+    """
+    # ── Validate ──────────────────────────────────────────────────────────────
+    if not req.symbols:
+        raise HTTPException(status_code=400, detail="symbols khong duoc rong")
+
+    if len(req.symbols) > 20:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Toi da 20 symbols moi lan, ban truyen {len(req.symbols)}",
+        )
+
+    if not StrategyFactory.exists(req.strategy_name):
+        available = StrategyFactory.list_names()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Strategy '{req.strategy_name}' khong ton tai. Co san: {available}",
+        )
+
+    try:
+        datetime.strptime(req.start_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"start_date khong hop le: {req.start_date}")
+
+    if req.end_date:
+        try:
+            datetime.strptime(req.end_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"end_date khong hop le: {req.end_date}")
+
+    max_concurrent = max(1, min(req.max_concurrent, 5))  # gioi han 1-5
+
+    # ── Tao bulk job ID ───────────────────────────────────────────────────────
+    bulk_job_id = f"bulk_{uuid.uuid4().hex[:12]}"
+    _jobs[bulk_job_id] = {
+        "status":   "running",
+        "progress": 0,
+        "message":  f"Dang chay {len(req.symbols)} symbols...",
+        "result":   None,
+        "error":    None,
+    }
+
+    # ── Chay background task ──────────────────────────────────────────────────
+    async def _bg_bulk() -> None:
+        semaphore = _asyncio.Semaphore(max_concurrent)
+        tasks = [
+            _run_single_bulk(
+                symbol=sym,
+                strategy_name=req.strategy_name,
+                parameters=req.parameters,
+                start_date=req.start_date,
+                end_date=req.end_date,
+                initial_balance=req.initial_balance,
+                semaphore=semaphore,
+            )
+            for sym in req.symbols
+        ]
+        results = await _asyncio.gather(*tasks, return_exceptions=True)
+
+        # Chuyen exception thanh error dict
+        final_results = []
+        for sym, res in zip(req.symbols, results):
+            if isinstance(res, Exception):
+                final_results.append({
+                    "symbol": sym,
+                    "status": "error",
+                    "error":  f"{type(res).__name__}: {str(res)[:200]}",
+                })
+            else:
+                final_results.append(res)
+
+        summary = _build_bulk_summary(final_results)
+        _jobs[bulk_job_id].update({
+            "status":   "done",
+            "progress": 100,
+            "message":  (
+                f"Hoan thanh {summary['success_symbols']}/{summary['total_symbols']} symbols"
+            ),
+            "result": {
+                "job_id":        bulk_job_id,
+                "strategy_name": req.strategy_name,
+                "period":        f"{req.start_date} → {req.end_date or 'hom nay'}",
+                "results":       final_results,
+                "summary":       summary,
+            },
+        })
+
+    _asyncio.create_task(_bg_bulk())
+
+    return {
+        "job_id":   bulk_job_id,
+        "status":   "running",
+        "symbols":  req.symbols,
+        "message":  f"Dang chay {len(req.symbols)} symbols (max {max_concurrent} song song)...",
+    }
+
+
+@router.get("/bulk/{job_id}")
+async def get_bulk_progress(job_id: str) -> dict:
+    """Poll tien do cua bulk backtest job.
+
+    Args:
+        job_id: ID cua bulk job (bat dau bang 'bulk_').
+
+    Returns:
+        Dict voi status, progress, message va result (khi done).
+
+    Raises:
+        HTTPException 404: Neu job_id khong ton tai.
+    """
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' khong ton tai")
+    return job
 
 

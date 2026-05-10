@@ -11,6 +11,18 @@ Luồng xử lý:
 
 Indicators được tính qua src/data/indicators.py (dùng chung toàn platform).
 Không import từ src/strategies/adts/ (package cũ đã bị xóa).
+
+State Persistence (fix ADTS-001):
+  _OrderState được persist vào Trade.signal_metadata["adts_order_state"] sau mỗi lần
+  thay đổi (entry, TP1 hit, trailing update). Khi bot restart, restore_order_states_from_db()
+  reconstruct _order_states từ các Trade có status='filled' và closed_at IS NULL.
+
+Calibration Fallback (fix ADTS-002):
+  _ensure_calibration() luôn trả về _CalibrationResult (không bao giờ None).
+  3 tầng fallback:
+    Tầng 1 — Fresh: đủ dữ liệu D1, tính toán thành công.
+    Tầng 2 — Stale: dùng calibration cũ (dù > 26h), log WARNING.
+    Tầng 3 — Hardcoded: không có gì cả, dùng giá trị conservative, log CRITICAL.
 """
 from __future__ import annotations
 
@@ -45,7 +57,7 @@ class _CalibrationResult:
         base_atr: ATR(14) trên D1.
         sideway_threshold: SMA(BBWidth, bbwidth_sma_period) * bbwidth_threshold_factor.
         min_slope: Base_ATR * min_slope_atr_factor / 5.
-        d1_candles_used: Số nến D1 đã dùng.
+        d1_candles_used: Số nến D1 đã dùng. 0 = hardcoded default (không có dữ liệu D1).
     """
     calibrated_at:     datetime
     base_atr:          float
@@ -58,6 +70,20 @@ class _CalibrationResult:
         """True nếu calibration đã quá 26 giờ (buffer 2h)."""
         age_hours = (datetime.utcnow() - self.calibrated_at).total_seconds() / 3600
         return age_hours > 26.0
+
+    @property
+    def is_hardcoded_default(self) -> bool:
+        """True nếu đây là giá trị mặc định hardcoded, không phải từ dữ liệu D1 thực.
+
+        Khi True: Shield chỉ còn ADX filter hoạt động — BBWidth và Slope bị vô hiệu hóa
+        vì sideway_threshold=0.0 và min_slope=1e-9 luôn được thỏa mãn.
+        """
+        return self.d1_candles_used == 0
+
+    @property
+    def age_hours(self) -> float:
+        """Tuổi của calibration tính bằng giờ."""
+        return (datetime.utcnow() - self.calibrated_at).total_seconds() / 3600
 
 
 @dataclass
@@ -105,13 +131,17 @@ class _OrderState:
         side: "long" hoặc "short".
         entry_price: Giá vào lệnh.
         amount_total: Tổng khối lượng ban đầu.
-        amount_remaining: Khối lượng còn lại sau TP1.
+        amount_remaining: Khối lượng còn lại sau TP1 hoặc Emergency Giai đoạn 1.
         stop_loss: Giá stop loss hiện tại.
         take_profit_1: Giá TP1 (chốt 50%).
         take_profit_2_trail: Giá trailing stop hiện tại.
         atr_at_entry: ATR tại thời điểm vào lệnh.
         tp1_hit: Đã chốt 50% tại TP1 chưa.
         sl_moved_to_entry: Đã dời SL về entry sau TP1 chưa.
+        emergency_triggered: Đã thực hiện Emergency Exit Giai đoạn 1 chưa.
+            True = đã đóng emergency_close_pct, đang chờ xem nến tiếp theo.
+            Nếu Shield vẫn vi phạm → Giai đoạn 2 đóng 100% còn lại.
+            Nếu Shield phục hồi → reset về False, tiếp tục giữ vị thế.
         opened_at: Thời điểm mở lệnh.
     """
     symbol:              str
@@ -125,6 +155,7 @@ class _OrderState:
     atr_at_entry:        float
     tp1_hit:             bool = False
     sl_moved_to_entry:   bool = False
+    emergency_triggered: bool = False
     opened_at:           datetime = field(default_factory=datetime.utcnow)
 
     def update_trailing_stop(
@@ -147,6 +178,62 @@ class _OrderState:
             new_trail = current_price + mult * atr
             self.take_profit_2_trail = min(self.take_profit_2_trail, new_trail)
         return self.take_profit_2_trail
+
+    def to_dict(self) -> dict:
+        """Serialize _OrderState sang dict để persist vào Trade.signal_metadata.
+
+        Returns:
+            Dict JSON-serializable chứa toàn bộ trạng thái lệnh.
+        """
+        return {
+            "symbol":               self.symbol,
+            "side":                 self.side,
+            "entry_price":          self.entry_price,
+            "amount_total":         self.amount_total,
+            "amount_remaining":     self.amount_remaining,
+            "stop_loss":            self.stop_loss,
+            "take_profit_1":        self.take_profit_1,
+            "take_profit_2_trail":  self.take_profit_2_trail,
+            "atr_at_entry":         self.atr_at_entry,
+            "tp1_hit":              self.tp1_hit,
+            "sl_moved_to_entry":    self.sl_moved_to_entry,
+            "emergency_triggered":  self.emergency_triggered,
+            "opened_at":            self.opened_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "_OrderState":
+        """Deserialize dict từ Trade.signal_metadata về _OrderState.
+
+        Args:
+            data: Dict đã được lưu bởi to_dict().
+
+        Returns:
+            _OrderState instance được reconstruct.
+        """
+        opened_at = datetime.utcnow()
+        raw_opened = data.get("opened_at")
+        if raw_opened:
+            try:
+                opened_at = datetime.fromisoformat(raw_opened)
+            except (ValueError, TypeError):
+                pass
+
+        return cls(
+            symbol=data["symbol"],
+            side=data["side"],
+            entry_price=float(data["entry_price"]),
+            amount_total=float(data["amount_total"]),
+            amount_remaining=float(data["amount_remaining"]),
+            stop_loss=float(data["stop_loss"]),
+            take_profit_1=float(data["take_profit_1"]),
+            take_profit_2_trail=float(data["take_profit_2_trail"]),
+            atr_at_entry=float(data["atr_at_entry"]),
+            tp1_hit=bool(data.get("tp1_hit", False)),
+            sl_moved_to_entry=bool(data.get("sl_moved_to_entry", False)),
+            emergency_triggered=bool(data.get("emergency_triggered", False)),
+            opened_at=opened_at,
+        )
 
 
 # ── ADTSStrategy ──────────────────────────────────────────────────────────────
@@ -370,6 +457,34 @@ class ADTSStrategy(BaseStrategy):
         bbwidth_sma = int(parameters.get("bbwidth_sma_period", 200))
         return bbwidth_sma * 10 + 100
 
+    @classmethod
+    def _make_hardcoded_calibration(cls) -> _CalibrationResult:
+        """Tạo _CalibrationResult với giá trị mặc định an toàn khi không có dữ liệu D1.
+
+        Được dùng làm Tầng 3 (last resort) trong _ensure_calibration() khi:
+        - Không đủ dữ liệu D1 để tính calibration mới.
+        - Không có calibration cũ nào trong bộ nhớ.
+
+        Giá trị được chọn theo nguyên tắc conservative:
+        - sideway_threshold = 0.0  → BBWidth > 0.0 luôn đúng (không block Shield)
+        - min_slope = 1e-9         → |slope| > 1e-9 gần như luôn đúng (không block Shield)
+        - base_atr = 0.0           → SL/TP sẽ dùng hard_sl_pct thay vì ATR
+        - d1_candles_used = 0      → đánh dấu là hardcoded (is_hardcoded_default = True)
+
+        Hệ quả: Shield chỉ còn ADX filter hoạt động thực sự.
+        Bot vẫn giao dịch được nhưng thiếu bộ lọc sideway từ D1.
+
+        Returns:
+            _CalibrationResult với giá trị mặc định an toàn.
+        """
+        return _CalibrationResult(
+            calibrated_at=datetime.utcnow(),
+            base_atr=0.0,
+            sideway_threshold=0.0,
+            min_slope=1e-9,
+            d1_candles_used=0,
+        )
+
     # ── Constructor ───────────────────────────────────────────────────────────
 
     def __init__(self, config: dict) -> None:
@@ -494,13 +609,16 @@ class ADTSStrategy(BaseStrategy):
 
         df = self._to_dataframe(ohlcv_data)
 
-        # Bước 1: Calibration (D1) — chạy nếu chưa có hoặc đã stale
+        # Bước 1: Calibration (D1) — chạy nếu chưa có hoặc đã stale.
+        # _ensure_calibration() luôn trả về _CalibrationResult (không bao giờ None).
+        # Tầng 3 (hardcoded default) được log CRITICAL bên trong _ensure_calibration().
         calibration = await self._ensure_calibration(ohlcv_data, symbol)
-        if calibration is None:
-            return StrategySignal(
-                signal="none", symbol=symbol, price=0,
-                reason="Calibration chưa sẵn sàng — thiếu dữ liệu D1",
-                metadata={"shield_passed": False, "calibration_ready": False},
+
+        # Cảnh báo mỗi cycle nếu đang dùng hardcoded default
+        if calibration.is_hardcoded_default:
+            logger.warning(
+                f"[ADTS][{symbol}] ⚠️ Đang dùng hardcoded calibration — "
+                f"Shield BBWidth/Slope bị vô hiệu hóa. Chỉ ADX filter còn hoạt động."
             )
 
         # Bước 2: Tính indicator intraday
@@ -557,29 +675,67 @@ class ADTSStrategy(BaseStrategy):
 
     async def _ensure_calibration(
         self, intraday_ohlcv: list, symbol: str
-    ) -> Optional[_CalibrationResult]:
-        """Đảm bảo calibration còn hiệu lực, chạy lại nếu stale.
+    ) -> _CalibrationResult:
+        """Đảm bảo calibration còn hiệu lực — luôn trả về _CalibrationResult (không bao giờ None).
+
+        Triển khai 3 tầng fallback để bot không bao giờ bị tê liệt vì thiếu dữ liệu D1:
+
+        Tầng 1 — Fresh Calibration (bình thường):
+            Đủ dữ liệu D1, tính toán thành công → cập nhật self._calibration.
+
+        Tầng 2 — Stale Fallback (dùng calibration cũ):
+            Tầng 1 thất bại nhưng self._calibration đã có từ trước (dù is_stale=True)
+            → dùng tạm, log WARNING kèm tuổi của calibration cũ.
+
+        Tầng 3 — Hardcoded Default (last resort):
+            Cả 2 tầng trên đều thất bại (chưa từng calibrate thành công)
+            → tạo _CalibrationResult với giá trị conservative, log CRITICAL.
+            Hệ quả: Shield chỉ còn ADX filter, BBWidth/Slope bị vô hiệu hóa.
+
+        Thread-safety: toàn bộ logic nằm trong asyncio.Lock để đảm bảo chỉ 1 coroutine
+        chạy calibration tại một thời điểm, ngay cả khi nhiều symbol chạy song song.
 
         Args:
             intraday_ohlcv: Dữ liệu OHLCV intraday để resample sang D1.
             symbol: Tên symbol (chỉ dùng cho logging).
 
         Returns:
-            _CalibrationResult hoặc None nếu không đủ dữ liệu.
+            _CalibrationResult — luôn có giá trị, không bao giờ None.
         """
         async with self._calibration_lock:
+            # Fast path: calibration còn hiệu lực → trả về ngay, không tính lại
             if self._calibration is not None and not self._calibration.is_stale:
                 return self._calibration
 
+            # ── Tầng 1: Thử tính calibration mới ────────────────────────────
             logger.info(f"[ADTS][{symbol}] Chạy Daily Calibration...")
             d1_ohlcv = self._resample_to_d1(intraday_ohlcv)
-            if not d1_ohlcv:
-                logger.warning(f"[ADTS][{symbol}] Không thể resample sang D1")
+
+            if d1_ohlcv:
+                result = self._run_calibration(d1_ohlcv, symbol)
+                if result is not None:
+                    self._calibration = result
+                    return self._calibration
+
+            # ── Tầng 2: Dùng calibration cũ nếu có (dù stale) ───────────────
+            if self._calibration is not None:
+                age = self._calibration.age_hours
+                logger.warning(
+                    f"[ADTS][{symbol}] ⚠️ Calibration mới thất bại — "
+                    f"dùng tạm kết quả cũ ({age:.1f}h tuổi, "
+                    f"calibrated_at={self._calibration.calibrated_at.strftime('%Y-%m-%d %H:%M')} UTC). "
+                    f"Shield vẫn hoạt động đầy đủ với ngưỡng cũ."
+                )
                 return self._calibration
 
-            result = self._run_calibration(d1_ohlcv, symbol)
-            if result is not None:
-                self._calibration = result
+            # ── Tầng 3: Hardcoded default — last resort ───────────────────────
+            logger.critical(
+                f"[ADTS][{symbol}] 🚨 Không có calibration nào (fresh lẫn cũ) — "
+                f"dùng hardcoded default. "
+                f"Shield chỉ còn ADX filter! BBWidth/Slope bị vô hiệu hóa. "
+                f"Kiểm tra lookback_candles (cần ≥{self._bbwidth_sma_period * 10 + 100} nến)."
+            )
+            self._calibration = self._make_hardcoded_calibration()
             return self._calibration
 
     def _resample_to_d1(self, ohlcv: list) -> list:
@@ -908,9 +1064,21 @@ class ADTSStrategy(BaseStrategy):
         calibration: _CalibrationResult,
         shield:      _ShieldState,
     ) -> Optional[StrategySignal]:
-        """Kiểm tra điều kiện Emergency Exit.
+        """Kiểm tra điều kiện Emergency Exit — 2 giai đoạn.
 
-        Kích hoạt khi ADX < emergency_adx_threshold HOẶC BBWidth < sideway_threshold.
+        Giai đoạn 1 (lần đầu vi phạm, emergency_triggered=False):
+            Đóng emergency_close_pct (50%), set emergency_triggered=True,
+            cập nhật amount_remaining để PnL Giai đoạn 2 chính xác,
+            persist state ngay lập tức.
+
+        Giai đoạn 2 (vi phạm tiếp diễn, emergency_triggered=True):
+            Đóng 100% phần còn lại (amount_remaining), full_close=True.
+
+        Nhánh Recovery (Shield phục hồi, emergency_triggered=True):
+            Reset emergency_triggered=False, tiếp tục giữ vị thế bình thường.
+
+        Điều kiện kích hoạt emergency:
+            ADX < emergency_adx_threshold  HOẶC  BBWidth < sideway_threshold.
 
         Args:
             symbol: Symbol giao dịch.
@@ -920,37 +1088,108 @@ class ADTSStrategy(BaseStrategy):
             shield: Trạng thái Shield hiện tại.
 
         Returns:
-            StrategySignal emergency exit hoặc None.
+            StrategySignal exit hoặc None nếu không có emergency.
         """
-        is_emergency = False
-        emg_reason   = ""
+        is_emergency, emg_reason = self._detect_emergency_condition(
+            snap, calibration
+        )
 
-        if snap.adx < self._emergency_adx_threshold:
-            is_emergency = True
-            emg_reason = (
-                f"🚨 Emergency Exit: ADX={snap.adx:.1f} < "
-                f"{self._emergency_adx_threshold} (xu hướng suy yếu)"
+        # ── Nhánh Recovery: Shield phục hồi sau khi đã trigger ───────────────
+        if not is_emergency and order_state.emergency_triggered:
+            order_state.emergency_triggered = False
+            logger.info(
+                f"[ADTS][{symbol}] ✅ Emergency condition cleared — "
+                f"Shield phục hồi, reset emergency_triggered. "
+                f"Tiếp tục giữ {order_state.amount_remaining:.4f} contracts."
             )
-        elif snap.bb_width < calibration.sideway_threshold:
-            is_emergency = True
-            emg_reason = (
-                f"🚨 Emergency Exit: BBWidth={snap.bb_width:.5f} < "
-                f"Threshold={calibration.sideway_threshold:.5f} (thị trường nén lại)"
+            asyncio.create_task(
+                self._persist_order_state(symbol),
+                name=f"adts_persist_emg_reset_{symbol}",
             )
+            return None
 
+        # ── Không có emergency ────────────────────────────────────────────────
         if not is_emergency:
             return None
 
-        logger.warning(f"[ADTS][{symbol}] {emg_reason}")
-        order_state.update_trailing_stop(
-            snap.close, snap.atr, self._tp2_trail_atr_mult
+        # ── Giai đoạn 2: Emergency tiếp diễn → đóng 100% còn lại ────────────
+        if order_state.emergency_triggered:
+            reason = (
+                f"🚨 Emergency Exit [Giai đoạn 2/2]: {emg_reason} — "
+                f"Điều kiện vẫn vi phạm, đóng 100% còn lại "
+                f"({order_state.amount_remaining:.4f} contracts)"
+            )
+            logger.warning(f"[ADTS][{symbol}] {reason}")
+            return self._make_exit_signal(
+                symbol=symbol, side=order_state.side, price=snap.close,
+                reason=reason, partial=False,
+                snap=snap, calibration=calibration, shield=shield, full_close=True,
+            )
+
+        # ── Giai đoạn 1: Lần đầu vi phạm → đóng emergency_close_pct ─────────
+        close_amount = order_state.amount_remaining * self._emergency_close_pct
+        remaining_after = order_state.amount_remaining * (1.0 - self._emergency_close_pct)
+
+        reason = (
+            f"🚨 Emergency Exit [Giai đoạn 1/2]: {emg_reason} — "
+            f"Đóng {self._emergency_close_pct * 100:.0f}% "
+            f"({close_amount:.4f} contracts). "
+            f"Còn lại {remaining_after:.4f} contracts, theo dõi nến tiếp theo."
         )
+        logger.warning(f"[ADTS][{symbol}] {reason}")
+
+        # Cập nhật state để Giai đoạn 2 tính PnL chính xác
+        order_state.emergency_triggered = True
+        order_state.amount_remaining    = remaining_after
+        order_state.update_trailing_stop(snap.close, snap.atr, self._tp2_trail_atr_mult)
+
+        # Persist ngay lập tức — bảo vệ trạng thái trước khi nến tiếp theo
+        asyncio.create_task(
+            self._persist_order_state(symbol),
+            name=f"adts_persist_emg_phase1_{symbol}",
+        )
+
         return self._make_exit_signal(
             symbol=symbol, side=order_state.side, price=snap.close,
-            reason=emg_reason, partial=True,
+            reason=reason, partial=True,
             partial_pct=self._emergency_close_pct,
             snap=snap, calibration=calibration, shield=shield, full_close=False,
         )
+
+    def _detect_emergency_condition(
+        self,
+        snap:        ADTSSnapshot,
+        calibration: _CalibrationResult,
+    ) -> tuple[bool, str]:
+        """Kiểm tra điều kiện kích hoạt Emergency Exit.
+
+        Tách riêng khỏi _check_emergency_exit() để tuân thủ Single Responsibility
+        và giới hạn ≤50 dòng mỗi hàm.
+
+        Args:
+            snap: ADTSSnapshot tại nến cuối.
+            calibration: Kết quả calibration hiện tại.
+
+        Returns:
+            Tuple (is_emergency, reason_str).
+            is_emergency=True nếu ADX hoặc BBWidth vi phạm ngưỡng.
+        """
+        if snap.adx < self._emergency_adx_threshold:
+            reason = (
+                f"ADX={snap.adx:.1f} < {self._emergency_adx_threshold} "
+                f"(xu hướng suy yếu)"
+            )
+            return True, reason
+
+        if snap.bb_width < calibration.sideway_threshold:
+            reason = (
+                f"BBWidth={snap.bb_width:.5f} < "
+                f"Threshold={calibration.sideway_threshold:.5f} "
+                f"(thị trường nén lại)"
+            )
+            return True, reason
+
+        return False, ""
 
     def _check_tp1(
         self,
@@ -1006,6 +1245,12 @@ class ADTSStrategy(BaseStrategy):
             f"Còn lại {order_state.amount_remaining:.4f} contracts"
         )
 
+        # Persist state sau khi TP1 hit — đảm bảo không mất khi restart
+        asyncio.create_task(
+            self._persist_order_state(symbol),
+            name=f"adts_persist_tp1_{symbol}",
+        )
+
         return self._make_exit_signal(
             symbol=symbol, side=side, price=tp1,
             reason=reason, partial=True,
@@ -1045,6 +1290,11 @@ class ADTSStrategy(BaseStrategy):
             (side == "short" and snap.high >= trail)
         )
         if not trail_hit:
+            # Persist trailing stop đã cập nhật dù chưa hit — để không mất khi restart
+            asyncio.create_task(
+                self._persist_order_state(symbol),
+                name=f"adts_persist_trail_{symbol}",
+            )
             return None
 
         reason = (
@@ -1188,6 +1438,8 @@ class ADTSStrategy(BaseStrategy):
             "sideway_threshold":  round(calibration.sideway_threshold, 6),
             "min_slope":          round(calibration.min_slope, 8),
             "calibrated_at":      calibration.calibrated_at.isoformat(),
+            "calibration_is_stale":   calibration.is_stale,
+            "calibration_is_default": calibration.is_hardcoded_default,
             "shield_passed":      shield.passed,
             "adx_ok":             shield.adx_ok,
             "bbwidth_ok":         shield.bbwidth_ok,
@@ -1225,10 +1477,13 @@ class ADTSStrategy(BaseStrategy):
         take_profit_1:    float,
         tp2_initial_trail: float,
         atr:              float,
+        bot_id:           Optional[int] = None,
     ) -> None:
         """Đăng ký trạng thái lệnh mới sau khi entry được thực thi.
 
         Được gọi từ bên ngoài (bot_engine hoặc order_manager) sau khi lệnh khớp.
+        Tự động persist state vào Trade.signal_metadata để đảm bảo tính nhất quán
+        khi bot restart (fix ADTS-001).
 
         Args:
             symbol: Symbol giao dịch.
@@ -1239,6 +1494,7 @@ class ADTSStrategy(BaseStrategy):
             take_profit_1: Giá TP1.
             tp2_initial_trail: Giá trailing stop ban đầu.
             atr: ATR tại thời điểm vào lệnh.
+            bot_id: ID của bot (dùng để query Trade khi persist).
         """
         self._order_states[symbol] = _OrderState(
             symbol=symbol,
@@ -1257,6 +1513,10 @@ class ADTSStrategy(BaseStrategy):
             f"SL={stop_loss:.4f} TP1={take_profit_1:.4f} "
             f"Trail_init={tp2_initial_trail:.4f}"
         )
+        asyncio.create_task(
+            self._persist_order_state(symbol, bot_id),
+            name=f"adts_persist_{symbol}",
+        )
 
     def clear_order_state(self, symbol: str) -> None:
         """Xóa order state khi lệnh đã đóng hoàn toàn.
@@ -1266,3 +1526,146 @@ class ADTSStrategy(BaseStrategy):
         """
         self._order_states.pop(symbol, None)
         logger.debug(f"[ADTS][{symbol}] OrderState đã xóa")
+
+    # ── State persistence (fix ADTS-001) ──────────────────────────────────────
+
+    async def _persist_order_state(
+        self, symbol: str, bot_id: Optional[int] = None
+    ) -> None:
+        """Persist _OrderState hiện tại vào Trade.signal_metadata trong DB.
+
+        Ghi key "adts_order_state" vào signal_metadata của Trade đang mở
+        (status='filled', closed_at IS NULL) tương ứng với symbol và bot_id.
+
+        Lỗi được bắt và log WARNING — không để crash cycle chính.
+
+        Args:
+            symbol: Symbol giao dịch cần persist state.
+            bot_id: ID của bot để lọc đúng Trade record.
+        """
+        order_state = self._order_states.get(symbol)
+        if order_state is None:
+            return
+
+        try:
+            from src.database.db import get_db
+            from src.database.models import Trade
+            from sqlalchemy import select
+
+            sym_clean = symbol.replace("/", "").replace(":USDT", "")
+
+            async with get_db() as db:
+                query = (
+                    select(Trade)
+                    .where(
+                        Trade.status == "filled",
+                        Trade.closed_at == None,  # noqa: E711
+                    )
+                    .order_by(Trade.created_at.desc())
+                    .limit(1)
+                )
+                if bot_id is not None:
+                    query = query.where(Trade.bot_id == bot_id)
+
+                result = await db.execute(query)
+                trade = result.scalar_one_or_none()
+
+                if trade is None:
+                    logger.debug(
+                        f"[ADTS][{symbol}] _persist_order_state: "
+                        f"không tìm thấy Trade OPEN (bot_id={bot_id})"
+                    )
+                    return
+
+                # Merge vào signal_metadata hiện có — không ghi đè toàn bộ
+                meta = dict(trade.signal_metadata or {})
+                meta["adts_order_state"] = order_state.to_dict()
+                trade.signal_metadata = meta
+
+                logger.debug(
+                    f"[ADTS][{symbol}] OrderState persisted → Trade #{trade.id} "
+                    f"(tp1_hit={order_state.tp1_hit}, "
+                    f"sl_moved={order_state.sl_moved_to_entry}, "
+                    f"trail={order_state.take_profit_2_trail:.4f})"
+                )
+
+        except Exception as exc:
+            logger.warning(
+                f"[ADTS][{symbol}] _persist_order_state lỗi (bỏ qua): "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    async def restore_order_states_from_db(self, bot_id: Optional[int] = None) -> int:
+        """Reconstruct _order_states từ các Trade OPEN trong DB khi bot restart.
+
+        Query tất cả Trade có status='filled' và closed_at IS NULL, đọc key
+        "adts_order_state" từ signal_metadata để rebuild _order_states dict.
+
+        Nên được gọi trong BotEngine.initialize() sau khi strategy được tạo.
+
+        Args:
+            bot_id: ID của bot để lọc đúng Trade records. None = lấy tất cả.
+
+        Returns:
+            Số lượng _OrderState đã được restore thành công.
+        """
+        restored = 0
+        try:
+            from src.database.db import get_db
+            from src.database.models import Trade
+            from sqlalchemy import select
+
+            async with get_db() as db:
+                query = (
+                    select(Trade)
+                    .where(
+                        Trade.status == "filled",
+                        Trade.closed_at == None,  # noqa: E711
+                        Trade.strategy == self.STRATEGY_NAME,
+                    )
+                )
+                if bot_id is not None:
+                    query = query.where(Trade.bot_id == bot_id)
+
+                result = await db.execute(query)
+                open_trades = result.scalars().all()
+
+            for trade in open_trades:
+                meta = trade.signal_metadata or {}
+                state_dict = meta.get("adts_order_state")
+                if not state_dict:
+                    logger.warning(
+                        f"[ADTS] Trade #{trade.id} {trade.symbol} không có "
+                        f"adts_order_state trong metadata — bỏ qua restore"
+                    )
+                    continue
+
+                try:
+                    order_state = _OrderState.from_dict(state_dict)
+                    self._order_states[trade.symbol] = order_state
+                    restored += 1
+                    logger.info(
+                        f"[ADTS] ✅ Restored OrderState: {trade.symbol} "
+                        f"{order_state.side.upper()} entry={order_state.entry_price:.4f} "
+                        f"SL={order_state.stop_loss:.4f} "
+                        f"tp1_hit={order_state.tp1_hit} "
+                        f"trail={order_state.take_profit_2_trail:.4f}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[ADTS] Trade #{trade.id} {trade.symbol} — "
+                        f"lỗi deserialize OrderState: {type(exc).__name__}: {exc}"
+                    )
+
+        except Exception as exc:
+            logger.error(
+                f"[ADTS] restore_order_states_from_db lỗi: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        if restored > 0:
+            logger.info(f"[ADTS] Restored {restored} OrderState(s) từ DB sau restart.")
+        else:
+            logger.info("[ADTS] Không có OrderState nào cần restore (không có Trade OPEN).")
+
+        return restored
