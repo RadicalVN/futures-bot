@@ -530,6 +530,9 @@ class ADTSStrategy(BaseStrategy):
         # ── Per-symbol order state ────────────────────────────────────────────
         # Key: symbol (normalized), Value: _OrderState
         self._order_states: dict[str, _OrderState] = {}
+        # Per-symbol asyncio.Lock — cô lập lock theo từng symbol để tránh bottleneck.
+        # Các symbol khác nhau không block lẫn nhau; chỉ cùng 1 symbol mới serialize.
+        self._order_states_locks: dict[str, asyncio.Lock] = {}
 
         logger.info(
             f"[ADTS] Khởi tạo | "
@@ -641,28 +644,35 @@ class ADTSStrategy(BaseStrategy):
         shield = self._evaluate_shield(snap, calibration)
         logger.debug(f"[ADTS][{symbol}] {shield.summary}")
 
-        # Bước 4: Kiểm tra vị thế hiện tại
-        pos_side    = self._get_position_side(symbol, current_positions)
-        order_state = self._order_states.get(symbol)
+        # Bước 4–5: Đọc order_state + Exit checks trong lock để tránh race condition.
+        # Lock bao phủ toàn bộ Read-Modify-Write trên _order_states[symbol]:
+        #   - Đọc order_state (Read)
+        #   - _check_exits() có thể modify attributes của order_state (Modify)
+        #   - pop() khi full_close (Write/Delete)
+        # I/O nặng (_ensure_calibration, build_adts_snapshot) nằm ngoài lock.
+        async with self._get_order_state_lock(symbol):
+            pos_side    = self._get_position_side(symbol, current_positions)
+            order_state = self._order_states.get(symbol)
 
-        # Bước 5: Exit checks (ưu tiên trước entry)
-        if pos_side is not None and order_state is not None:
-            exit_signal = self._check_exits(symbol, snap, order_state, calibration, shield)
-            if exit_signal is not None:
-                if exit_signal.metadata and exit_signal.metadata.get("full_close", False):
-                    self._order_states.pop(symbol, None)
-                return exit_signal
+            # Bước 5: Exit checks (ưu tiên trước entry)
+            if pos_side is not None and order_state is not None:
+                exit_signal = self._check_exits(symbol, snap, order_state, calibration, shield)
+                if exit_signal is not None:
+                    if exit_signal.metadata and exit_signal.metadata.get("full_close", False):
+                        self._order_states.pop(symbol, None)
+                    return exit_signal
 
-        # Bước 6: Entry Signal
-        if pos_side is None:
-            entry_signal = self._check_entry(symbol, snap, shield, calibration)
-            if entry_signal is not None:
-                return entry_signal
+            # Bước 6: Entry Signal
+            if pos_side is None:
+                entry_signal = self._check_entry(symbol, snap, shield, calibration)
+                if entry_signal is not None:
+                    return entry_signal
 
-        # Không có tín hiệu
-        reason_parts = [shield.summary]
-        if pos_side:
-            reason_parts.append(f"Đang giữ {pos_side.upper()}")
+            # Không có tín hiệu — snapshot reason_parts trong lock để đọc pos_side nhất quán
+            reason_parts = [shield.summary]
+            if pos_side:
+                reason_parts.append(f"Đang giữ {pos_side.upper()}")
+
         return StrategySignal(
             signal="none",
             symbol=symbol,
@@ -1467,7 +1477,7 @@ class ADTSStrategy(BaseStrategy):
 
     # ── Public order state management ─────────────────────────────────────────
 
-    def register_order_state(
+    async def register_order_state(
         self,
         symbol:           str,
         side:             str,
@@ -1485,6 +1495,9 @@ class ADTSStrategy(BaseStrategy):
         Tự động persist state vào Trade.signal_metadata để đảm bảo tính nhất quán
         khi bot restart (fix ADTS-001).
 
+        Thread-safety: bọc lock per-symbol để tránh race condition với analyze()
+        đang chạy song song cho cùng symbol.
+
         Args:
             symbol: Symbol giao dịch.
             side: "long" hoặc "short".
@@ -1496,17 +1509,18 @@ class ADTSStrategy(BaseStrategy):
             atr: ATR tại thời điểm vào lệnh.
             bot_id: ID của bot (dùng để query Trade khi persist).
         """
-        self._order_states[symbol] = _OrderState(
-            symbol=symbol,
-            side=side,
-            entry_price=entry_price,
-            amount_total=amount,
-            amount_remaining=amount,
-            stop_loss=stop_loss,
-            take_profit_1=take_profit_1,
-            take_profit_2_trail=tp2_initial_trail,
-            atr_at_entry=atr,
-        )
+        async with self._get_order_state_lock(symbol):
+            self._order_states[symbol] = _OrderState(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                amount_total=amount,
+                amount_remaining=amount,
+                stop_loss=stop_loss,
+                take_profit_1=take_profit_1,
+                take_profit_2_trail=tp2_initial_trail,
+                atr_at_entry=atr,
+            )
         logger.info(
             f"[ADTS][{symbol}] OrderState đăng ký: "
             f"{side.upper()} entry={entry_price:.4f} "
@@ -1518,16 +1532,41 @@ class ADTSStrategy(BaseStrategy):
             name=f"adts_persist_{symbol}",
         )
 
-    def clear_order_state(self, symbol: str) -> None:
+    async def clear_order_state(self, symbol: str) -> None:
         """Xóa order state khi lệnh đã đóng hoàn toàn.
+
+        Thread-safety: bọc lock per-symbol trước khi xóa.
+        Sau khi xóa state, lock của symbol cũng được cleanup để tối ưu bộ nhớ —
+        lock sẽ được tạo lại tự động nếu symbol được giao dịch lại.
 
         Args:
             symbol: Symbol giao dịch cần xóa state.
         """
-        self._order_states.pop(symbol, None)
+        async with self._get_order_state_lock(symbol):
+            self._order_states.pop(symbol, None)
+        # Cleanup lock sau khi release — tối ưu bộ nhớ
+        # (lock không còn cần thiết khi không có order state)
+        self._order_states_locks.pop(symbol, None)
         logger.debug(f"[ADTS][{symbol}] OrderState đã xóa")
 
     # ── State persistence (fix ADTS-001) ──────────────────────────────────────
+
+    def _get_order_state_lock(self, symbol: str) -> asyncio.Lock:
+        """Lấy hoặc tạo asyncio.Lock riêng cho symbol.
+
+        Mỗi symbol có 1 Lock độc lập — các symbol khác nhau không block lẫn nhau.
+        Dict assignment trong asyncio là atomic (CPython single-threaded event loop)
+        nên không cần lock bảo vệ chính `_order_states_locks` dict.
+
+        Args:
+            symbol: Symbol giao dịch (vd: "BTC/USDT").
+
+        Returns:
+            asyncio.Lock dành riêng cho symbol này.
+        """
+        if symbol not in self._order_states_locks:
+            self._order_states_locks[symbol] = asyncio.Lock()
+        return self._order_states_locks[symbol]
 
     async def _persist_order_state(
         self, symbol: str, bot_id: Optional[int] = None
@@ -1603,6 +1642,9 @@ class ADTSStrategy(BaseStrategy):
 
         Nên được gọi trong BotEngine.initialize() sau khi strategy được tạo.
 
+        Thread-safety: I/O DB nằm ngoài lock; mỗi write vào _order_states được
+        bọc lock per-symbol riêng để không block các symbol khác.
+
         Args:
             bot_id: ID của bot để lọc đúng Trade records. None = lấy tất cả.
 
@@ -1615,6 +1657,7 @@ class ADTSStrategy(BaseStrategy):
             from src.database.models import Trade
             from sqlalchemy import select
 
+            # I/O DB nằm ngoài lock — không gây bottleneck
             async with get_db() as db:
                 query = (
                     select(Trade)
@@ -1642,7 +1685,9 @@ class ADTSStrategy(BaseStrategy):
 
                 try:
                     order_state = _OrderState.from_dict(state_dict)
-                    self._order_states[trade.symbol] = order_state
+                    # Lock per-symbol bao phủ chỉ thao tác write vào dict
+                    async with self._get_order_state_lock(trade.symbol):
+                        self._order_states[trade.symbol] = order_state
                     restored += 1
                     logger.info(
                         f"[ADTS] ✅ Restored OrderState: {trade.symbol} "

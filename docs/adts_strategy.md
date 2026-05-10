@@ -39,6 +39,13 @@
 | | | - Tách `_detect_emergency_condition()` — Single Responsibility, ≤50 dòng |
 | | | - Giai đoạn 1: cập nhật `amount_remaining` ngay để PnL Giai đoạn 2 chính xác |
 | | | - Persist state ngay sau Giai đoạn 1 và Recovery qua `asyncio.create_task()` |
+| v1.4 | 2026-05-11 | [INF-001] Per-symbol Async Safety Lock cho `_order_states` |
+| | | - `__init__()`: thêm `_order_states_locks: dict[str, asyncio.Lock] = {}` |
+| | | - `_get_order_state_lock(symbol)`: helper tạo/lấy lock per-symbol |
+| | | - `analyze()`: bọc lock quanh Read-Modify-Write (get + _check_exits + pop) |
+| | | - `register_order_state()`: đổi thành `async def`, bọc lock quanh dict write |
+| | | - `clear_order_state()`: đổi thành `async def`, bọc lock + cleanup lock sau xóa |
+| | | - `restore_order_states_from_db()`: lock per-symbol quanh từng write, I/O DB ngoài lock |
 
 ---
 
