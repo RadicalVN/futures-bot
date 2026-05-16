@@ -767,6 +767,41 @@ class ADTSStrategy(BaseStrategy):
             self._calibration = self._make_hardcoded_calibration()
             return self._calibration
 
+    def seed_d1_calibration(self, d1_candles: list, symbol: str = "") -> bool:
+        """Pre-seed D1 calibration cho backtest -- tranh hardcoded default (Tang 3).
+
+        Duoc goi tu _run_engine_job TRUOC BacktestEngine.run() de dam bao
+        ADTS co calibration hop le ngay tu nen dau tien cua simulation.
+
+        Khong anh huong den live trading (BotEngine khong goi method nay).
+
+        Args:
+            d1_candles: List [[ts_ms, o, h, l, c, v], ...] dang D1 tu DB cache.
+            symbol: Ten symbol (chi dung cho logging).
+
+        Returns:
+            True neu calibration thanh cong va self._calibration duoc set.
+            False neu khong du data (d1_candles < min_required).
+        """
+        result = self._run_calibration(d1_candles, symbol)
+        if result is not None:
+            self._calibration = result
+            logger.info(
+                f"[ADTS][{symbol}] seed_d1_calibration OK: "
+                f"{result.d1_candles_used} D1 candles | "
+                f"ATR={result.base_atr:.4f} | "
+                f"sideway_thr={result.sideway_threshold:.6f} | "
+                f"min_slope={result.min_slope:.8f}"
+            )
+            return True
+        min_needed = self._bbwidth_sma_period + self._atr_period + 10
+        logger.warning(
+            f"[ADTS][{symbol}] seed_d1_calibration FAIL: "
+            f"co {len(d1_candles)} nen D1, can >={min_needed} "
+            f"(bbwidth_sma={self._bbwidth_sma_period} + atr={self._atr_period} + 10)"
+        )
+        return False
+
     def _resample_to_d1(self, ohlcv: list) -> list:
         """Resample dữ liệu intraday sang D1 bằng pandas.
 

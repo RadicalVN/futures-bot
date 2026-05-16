@@ -328,3 +328,192 @@ Mỗi khi viết xong một function/module, AI **bắt buộc** cung cấp mộ
 | Phát hiện code smell | Báo cáo, hỏi ý kiến | Tự ý refactor |
 | Hoàn thành function | Cung cấp Example Usage / Unit Test | Không có verification |
 | Thêm thư viện mới | Xin phép Tech Lead | Tự ý thêm vào requirements |
+| Xuất code thay đổi | Diff-Only + Context Header | Viết lại toàn bộ file lớn |
+
+---
+
+## 10. AI Token Optimization Protocol (Giao thức Tối ưu hóa Token AI)
+
+> **Mục tiêu:** Giảm thiểu lượng Token tiêu thụ trong mỗi phiên làm việc với AI mà không làm giảm chất lượng code. Mỗi Token tiêu thụ không cần thiết là một khoản chi phí phát triển lãng phí.
+
+---
+
+### 10.1. Quy tắc Đầu ra (Output Rules) — BẮT BUỘC TUYỆT ĐỐI
+
+#### Quy tắc #1: Diff-Only Output (Chỉ xuất phần thay đổi)
+
+> ❌ **NGHIÊM CẤM AI viết lại toàn bộ nội dung của một file** khi chỉ có một phần nhỏ thay đổi.
+
+Khi cần sửa một hàm trong file dài, AI **chỉ được** xuất:
+1. Tên file và phạm vi dòng bị ảnh hưởng.
+2. Đoạn code cũ cần xóa (nếu có).
+3. Đoạn code mới thay thế.
+
+```
+# ✅ ĐÚNG — Diff-Only Output
+# File: src/apps/trading/bot_engine.py, lines 45-62
+
+# [XÓA ĐOẠN CŨ]
+- result = await exchange.fetch_ohlcv(symbol, timeframe)
+
+# [THÊM ĐOẠN MỚI]
++ candles_1m = await self._adapter.fetch_latest_1m_candles(symbol, limit=500)
++ result = self._resampler.resample(candles_1m, timeframe)
+```
+
+```
+# ❌ SAI — Viết lại toàn bộ file 300 dòng chỉ để sửa 2 dòng
+```
+
+#### Quy tắc #2: Context Header — Chống lỗi Ghép mã (Syntax Stitching Risk)
+
+> ❌ **NGHIÊM CẤM** xuất đoạn code diff mà không có context header bọc ngoài.
+
+Khi xuất code dạng hiệu chỉnh (diff), AI **bắt buộc** bao bọc đoạn thay đổi bằng **tên hàm/class chứa nó** (context header) hoặc **signature dòng** để người tích hợp biết chính xác vị trí dán vào. Mục đích: ngăn chặn lỗi thụt lề `IndentationError` và lỗi dán sai vị trí khi tích hợp thủ công.
+
+```python
+# ✅ ĐÚNG — Có context header rõ ràng
+# File: src/core/data_pipeline/integrity_guard.py
+# Class: DataIntegrityGuard
+# Method: _check_gap() — THAY THẾ TOÀN BỘ METHOD NÀY
+
+    def _check_gap(self, candles: list[Candle1m]) -> IntegrityCheckResult | None:
+        # ... nội dung mới ...
+```
+
+```python
+# ❌ SAI — Chỉ xuất snippet trơ, không biết dán vào đâu
+    for i in range(1, len(candles)):
+        delta = candles[i].open_time - candles[i-1].open_time
+        if delta.total_seconds() > 90:
+            return IntegrityCheckResult(...)
+```
+
+#### Quy tắc #3: Single Function Output (Xuất từng hàm)
+
+Khi implement module mới có nhiều hàm, AI **bắt buộc**:
+1. Liệt kê danh sách tất cả các hàm cần viết **trước**.
+2. Viết từng hàm **một lần một**, chờ xác nhận trước khi viết hàm tiếp theo.
+3. **Không được** dump cả class nếu tổng số dòng > 100.
+
+```
+# ✅ ĐÚNG — Quy trình Single Function Output
+# AI: "Tôi sẽ viết DataIntegrityGuard theo thứ tự:
+#   (1) __init__() + _check_gap()
+#   (2) _check_warmup()
+#   (3) _check_outlier()
+#   (4) validate()  ← hàm orchestrator
+# Bắt đầu với (1). Confirm để tôi tiếp tục (2)?"
+```
+
+---
+
+### 10.2. Quy tắc Yêu cầu (Request Rules) — Dành cho Tech Lead
+
+| Thay vì... | Hãy dùng... |
+|---|---|
+| "Viết module data pipeline" | "Viết hàm `_check_gap()` trong `DataIntegrityGuard`" |
+| "Sửa bot engine" | "Sửa method `_run_cycle()` trong `bot_engine.py` tại dòng 45-62" |
+| "Cập nhật tài liệu" | "Bổ sung mục 3.5 vào `DATA_ARCHITECTURE_GUIDELINES.md`" |
+
+> **Nguyên tắc:** Yêu cầu càng cụ thể → AI đọc ít file hơn → Tiêu thụ ít Token hơn.
+
+---
+
+### 10.3. Tái khẳng định Kỷ luật Code Bắt buộc
+
+#### Hàm ngắn ≤ 50 dòng
+
+> ❌ **NGHIÊM CẤM** viết hàm dài hơn 50 dòng code thực thi (không tính docstring/comment).
+
+```python
+# ❌ SAI — Hàm "God" 150 dòng
+async def run_full_cycle(self, symbol: str) -> None:
+    # fetch + resample + validate + strategy + order — tất cả trong 1 hàm
+
+# ✅ ĐÚNG — Orchestrator gọi các sub-function ≤ 50 dòng
+async def run_full_cycle(self, symbol: str) -> None:
+    df      = await self._fetch_and_resample(symbol)
+    result  = await self._validate_data(df)
+    if not result.is_valid:
+        return
+    signal  = await self._run_strategy(df)
+    await self._execute_signal(signal)
+```
+
+#### 100% Type Hinting
+
+```python
+# ❌ SAI
+def validate(self, candles, strategy_config):
+    ...
+
+# ✅ ĐÚNG
+def validate(
+    self,
+    candles: list[ResampledCandle],
+    strategy_config: StrategyConfig,
+) -> IntegrityCheckResult:
+    ...
+```
+
+#### Docstring Google Style
+
+```python
+def validate(
+    self,
+    candles: list[ResampledCandle],
+    strategy_config: StrategyConfig,
+) -> IntegrityCheckResult:
+    """Kiểm tra tính toàn vẹn của dữ liệu trước khi đưa vào Strategy.
+
+    Thực hiện 3 kiểm tra theo thứ tự: Gap → Warmup → Outlier.
+    Dừng và trả về BLOCK ngay khi phát hiện vi phạm đầu tiên.
+
+    Args:
+        candles: Danh sách nến đã Resample, sắp xếp theo thời gian tăng dần.
+        strategy_config: Cấu hình chiến lược, chứa `min_candles_required`.
+
+    Returns:
+        IntegrityCheckResult với `is_valid=True` nếu tất cả kiểm tra qua,
+        hoặc `is_valid=False` kèm `reason` và `heal_event` nếu cần Self-Healing.
+
+    Raises:
+        ValueError: Nếu `candles` là danh sách rỗng.
+    """
+```
+
+---
+
+### 10.4. Ma trận Chi phí Token (Token Cost Matrix)
+
+| Hành động | Token ước lượng | Đánh giá |
+|---|---|---|
+| Đọc file < 100 dòng | ~200 Token | ✅ Chấp nhận |
+| Đọc file 300 dòng | ~600 Token | ⚠️ Chỉ đọc phần cần (StartLine/EndLine) |
+| Đọc file > 500 dòng | ~1,000+ Token | ❌ Tránh — dùng grep/search trước |
+| Viết lại toàn bộ file 300 dòng | ~700 Token | ❌ Cấm — dùng Diff-Only |
+| Viết 1 hàm ≤ 50 dòng (Diff-Only + Header) | ~150 Token | ✅ Tối ưu |
+| Lập kế hoạch / Phân tích kiến trúc | ~300 Token | ✅ Đầu tư có giá trị |
+
+> **Quy tắc ngón tay cái:** Nếu một tác vụ tốn hơn 500 Token, hãy tìm cách chia nhỏ hơn.
+
+---
+
+### 10.5. Token Optimization Self-Check (Bổ sung vào AI Self-Check — Chương 6)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│         TOKEN OPTIMIZATION SELF-CHECK (Chapter 10 Extension)        │
+├─────┬────────────────────────────────────────────────────────────────┤
+│  6  │ Tôi có đang viết lại toàn bộ file > 100 dòng không?           │
+│     │ Nếu CÓ → Chuyển sang Diff-Only Output ngay.                   │
+│  7  │ File tôi sắp đọc có > 300 dòng không? Tôi có cần đọc toàn    │
+│     │ bộ, hay chỉ cần đọc phần liên quan (StartLine/EndLine)?       │
+│  8  │ Module tôi sắp viết có > 100 dòng không?                      │
+│     │ Nếu CÓ → Single Function Output, viết từng hàm, chờ confirm.  │
+│  9  │ Đoạn Diff tôi vừa viết có Context Header chưa?                │
+│     │ Nếu CHƯA → Bọc vào tên class/method/file + số dòng ngay.     │
+└─────┴────────────────────────────────────────────────────────────────┘
+```
+

@@ -24,8 +24,9 @@ from src.data.indicators import (
     build_adts_snapshot,
     calculate_ema,
 )
-# Analytics metrics — dung chung voi live trading (Task 4.3)
-from src.apps.analytics.service import _calc_metrics as _analytics_calc_metrics
+# ── Core BacktestEngine (INF-002) ─────────────────────────────────────────────
+from src.core.backtest_engine import BacktestEngine, BacktestConfig, TradeRecord
+from src.core.analytics import calc_max_drawdown_from_equity
 
 
 # ── ADTS config shim (replaces deleted ADTSConfig Pydantic model) ─────────────
@@ -1310,611 +1311,6 @@ def validate_backtest_integrity(
     }
 
 
-async def _run_backtest_engine(bot, exchange, start_ms, end_ms, initial_balance,
-                                timeframe_override=None, job_id=None,
-                                sl_pct_override=None, tp_pct_override=None):
-    """
-    Backtest engine với pre-computed indicators (nhanh hơn ~100x).
-    Cập nhật progress vào _jobs[job_id] nếu có.
-    """
-    import pandas as pd
-
-    def _update_progress(pct, msg):
-        if job_id and job_id in _jobs:
-            _jobs[job_id]["progress"] = pct
-            _jobs[job_id]["message"] = msg
-
-    strategy_name = bot.strategy_name
-    parameters = dict(bot.parameters or {})
-    # Override SL/TP nếu được truyền từ request
-    if sl_pct_override is not None:
-        parameters["stop_loss_pct"] = float(sl_pct_override)
-    if tp_pct_override is not None:
-        parameters["take_profit_pct"] = float(tp_pct_override)
-    timeframe = timeframe_override or parameters.get("timeframe", "5m")
-    leverage = int(parameters.get("leverage", 5))
-    position_size_pct = float(parameters.get("position_size_pct", 0.10))
-    # Phí giao dịch và trượt giá — đọc từ parameters, fallback về hằng số cũ
-    commission_pct = float(parameters.get("commission_pct", COMMISSION))
-    slippage_pct   = float(parameters.get("slippage_pct", 0.0))
-    lookback = _get_lookback(strategy_name, parameters)
-
-    symbols_raw = bot.symbols or ["BTCUSDT"]
-    symbol = _normalize_symbol(symbols_raw[0] if symbols_raw else "BTCUSDT")
-    tf_ms = _timeframe_ms(timeframe)
-
-    _update_progress(5, f"Đang kiểm tra dữ liệu {symbol} {timeframe}...")
-    logger.info(f"Backtest [{job_id}]: fetch {symbol} {timeframe} {start_ms}→{end_ms}")
-
-    # Warmup: lùi về đúng lookback nến trước start_ms
-    warmup_start_ms = start_ms - (lookback * tf_ms)
-
-    # ── Bắt buộc đọc từ DB cache — KHÔNG fallback fetch từ exchange ──────────
-    # Lý do: fetch từ exchange chỉ có warmup ngắn → EMA chưa hội tụ → kết quả sai.
-    # Mọi trường hợp thiếu data đều raise lỗi rõ ràng để user biết cần refresh cache.
-    from src.data.ohlcv_service import get_candles as _db_get_candles, get_data_range as _db_get_range
-
-    db_range = await _db_get_range(strategy_name, symbol, timeframe)
-
-    # ── Kiểm tra 1: DB có data không ─────────────────────────────────────────
-    if db_range["count"] == 0 or db_range["min_ts"] is None:
-        raise ValueError(
-            f"❌ Chưa có dữ liệu cache cho {strategy_name}/{symbol}/{timeframe}.\n"
-            f"Vào tab 'Market Data' → nhấn 'Cập nhật tất cả' để tải data trước khi backtest."
-        )
-
-    # ── Kiểm tra 2: DB có đủ warmup (min_ts <= warmup_start_ms) ──────────────
-    if db_range["min_ts"] > warmup_start_ms:
-        warmup_need_date = _to_utc7_str(warmup_start_ms)
-        db_min_date      = db_range["min_date"]
-        raise ValueError(
-            f"❌ Dữ liệu cache không đủ warmup cho {strategy_name}/{symbol}/{timeframe}.\n"
-            f"Cần data từ: {warmup_need_date} (lookback={lookback} nến × {timeframe})\n"
-            f"DB hiện có từ: {db_min_date}\n"
-            f"→ Hãy chạy 'Full Refresh' trong tab Market Data để tải lại 5 năm data."
-        )
-
-    # ── Kiểm tra 3: DB có đủ đến end_ms (max_ts >= end_ms - lag cho phép) ────
-    # Cho phép lag tối đa 3 nến (để tránh false alarm khi data mới nhất chưa đóng)
-    max_lag_ms = tf_ms * 3
-    if db_range["max_ts"] < end_ms - max_lag_ms:
-        db_max_date   = db_range["max_date"]
-        need_end_date = _to_utc7_str(end_ms)
-        raise ValueError(
-            f"❌ Dữ liệu cache chưa cập nhật đến ngày kết thúc backtest.\n"
-            f"Cần data đến: {need_end_date}\n"
-            f"DB hiện có đến: {db_max_date}\n"
-            f"→ Vào tab 'Market Data' → nhấn 'Cập nhật tất cả' để bổ sung data mới."
-        )
-
-    # ── Đọc data từ DB ────────────────────────────────────────────────────────
-    _update_progress(8, f"Đọc dữ liệu từ DB cache ({db_range['count']} nến)...")
-    all_candles = await _db_get_candles(strategy_name, symbol, timeframe, warmup_start_ms, end_ms)
-    logger.info(
-        f"Backtest [{job_id}]: đọc {len(all_candles)} nến từ DB "
-        f"(cache: {db_range['min_date']} → {db_range['max_date']})"
-    )
-
-    # ── Kiểm tra 4: Số nến thực tế vs kỳ vọng (phát hiện gap) ───────────────
-    # Số nến kỳ vọng = (end_ms - warmup_start_ms) / tf_ms
-    # Nếu thiếu >1% → có gap trong data → kết quả tính toán sẽ sai
-    expected_candles = int((end_ms - warmup_start_ms) / tf_ms)
-    actual_candles   = len(all_candles)
-    if expected_candles > 0:
-        gap_pct = (expected_candles - actual_candles) / expected_candles * 100
-        if gap_pct > 1.0:
-            raise ValueError(
-                f"❌ Phát hiện gap trong dữ liệu cache {strategy_name}/{symbol}/{timeframe}.\n"
-                f"Kỳ vọng ~{expected_candles} nến, thực tế chỉ có {actual_candles} nến "
-                f"(thiếu {gap_pct:.1f}%).\n"
-                f"→ Vào tab 'Market Data' → nhấn 'Full Refresh' để tải lại data hoàn chỉnh."
-            )
-
-    # Số nến tối thiểu thực sự cần: đủ để tính indicator + 1 nến để bắt đầu simulate
-    # Với ADTS: lookback đã tính đúng số ngày D1 cần thiết
-    # Với các chiến lược khác: lookback là số nến indicator
-    min_required = lookback + 1
-    if len(all_candles) < min_required:
-        raise ValueError(
-            f"Không đủ dữ liệu: có {len(all_candles)} nến, cần ít nhất {min_required}. "
-            f"Hãy mở rộng khoảng thời gian backtest hoặc giảm bbwidth_sma_period."
-        )
-
-    total_candles = len(all_candles)
-    logger.info(f"Backtest [{job_id}]: {total_candles} candles fetched")
-    _update_progress(15, f"Đã tải {total_candles} nến. Đang tính indicators...")
-
-    # ── Pre-compute indicators (1 lần cho toàn bộ) ───────────────────────────
-    df = pd.DataFrame(all_candles, columns=["timestamp","open","high","low","close","volume"])
-
-    if strategy_name == "sma_macd_cross":
-        df = _precompute_sma_macd(df, parameters)
-    elif strategy_name in ("sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5", "sma_macd_cross_v6"):
-        df = _precompute_sma_macd(df, parameters)
-
-        # ── V6: kiểm tra ADX đã hội tụ tại điểm bắt đầu simulate ────────────
-        if strategy_name == "sma_macd_cross_v6":
-            adx_period = int(parameters.get("adx_period", int(float(os.environ.get("ADX_PERIOD", 14)))))
-            adx_warmup_needed = adx_period * 2  # seed point của Wilder smoothing
-            # Tìm start_idx (nến đầu tiên >= start_ms) để kiểm tra
-            ts_arr_check = df["timestamp"].to_numpy()
-            start_idx_check = next(
-                (idx for idx, t in enumerate(ts_arr_check) if int(t) >= start_ms),
-                len(ts_arr_check)
-            )
-            if start_idx_check < adx_warmup_needed:
-                raise ValueError(
-                    f"❌ Không đủ warmup để tính ADX({adx_period}) cho V6.\n"
-                    f"Cần ít nhất {adx_warmup_needed} nến warmup trước ngày bắt đầu, "
-                    f"nhưng chỉ có {start_idx_check} nến.\n"
-                    f"→ Chạy 'Full Refresh' trong tab Market Data để có đủ 5 năm data."
-                )
-            # Kiểm tra giá trị ADX tại start_idx có hợp lệ không (> 0)
-            adx_at_start = float(df["adx"].iloc[start_idx_check])
-            if adx_at_start == 0.0:
-                raise ValueError(
-                    f"❌ ADX({adx_period}) chưa hội tụ tại điểm bắt đầu backtest.\n"
-                    f"ADX = 0 tại nến đầu tiên của khoảng backtest (index={start_idx_check}).\n"
-                    f"Cần thêm warmup: tăng lookback hoặc chọn ngày bắt đầu muộn hơn.\n"
-                    f"→ Chạy 'Full Refresh' trong tab Market Data để có đủ 5 năm data."
-                )
-    elif strategy_name == "sma_macd_cross_v7":
-        # V7 = V1 + BB — precompute SMA+MACD rồi thêm BB
-        df = _precompute_sma_macd(df, parameters)
-        from src.data.indicators import add_bb_to_df as _add_bb
-        df = _add_bb(
-            df,
-            period=parameters.get("bb_period", 20),
-            mult=float(parameters.get("bb_mult", 2.0)),
-        )
-    elif strategy_name == "adts":
-        _update_progress(20, "Đang kiểm tra dữ liệu D1 cho ADTS calibration...")
-        # ADTS cần thêm D1 data cho daily calibration
-        cfg_adts = ADTSConfig.from_dict(parameters)
-        d1_days_needed = cfg_adts.bbwidth_sma_period + cfg_adts.atr_period + 10
-        d1_start_ms = warmup_start_ms - (d1_days_needed * 86_400_000)
-
-        # Đọc D1 từ DB cache (strategy_name + "1d")
-        d1_db_range = await _db_get_range(strategy_name, symbol, "1d")
-
-        if d1_db_range["count"] == 0 or d1_db_range["min_ts"] is None:
-            raise ValueError(
-                f"❌ Chưa có dữ liệu D1 cache cho {strategy_name}/{symbol}/1d.\n"
-                f"ADTS cần D1 data để tính daily calibration.\n"
-                f"→ Vào tab 'Market Data' → nhấn 'Cập nhật tất cả'."
-            )
-        if d1_db_range["min_ts"] > d1_start_ms:
-            raise ValueError(
-                f"❌ Dữ liệu D1 cache không đủ cho ADTS calibration.\n"
-                f"Cần D1 từ: {_to_utc7_str(d1_start_ms)}\n"
-                f"DB D1 có từ: {d1_db_range['min_date']}\n"
-                f"→ Chạy 'Full Refresh' trong tab Market Data."
-            )
-        if d1_db_range["max_ts"] < end_ms - 86_400_000 * 3:
-            raise ValueError(
-                f"❌ Dữ liệu D1 cache chưa cập nhật đến ngày kết thúc backtest.\n"
-                f"DB D1 có đến: {d1_db_range['max_date']}\n"
-                f"→ Vào tab 'Market Data' → nhấn 'Cập nhật tất cả'."
-            )
-
-        _update_progress(21, f"Đọc D1 từ DB cache ({d1_db_range['count']} ngày)...")
-        d1_candles = await _db_get_candles(strategy_name, symbol, "1d", d1_start_ms, end_ms)
-        logger.info(
-            f"Backtest [{job_id}] ADTS: đọc {len(d1_candles)} D1 candles từ DB "
-            f"(need ≥{d1_days_needed})"
-        )
-        if len(d1_candles) < d1_days_needed:
-            raise ValueError(
-                f"❌ Không đủ D1 data cho ADTS calibration: có {len(d1_candles)} ngày, "
-                f"cần ≥{d1_days_needed} ngày.\n"
-                f"→ Chạy 'Full Refresh' trong tab Market Data."
-            )
-        _update_progress(22, f"Đang tính ADTS indicators + Daily Calibration ({len(d1_candles)} ngày D1)...")
-        df = _precompute_adts(df, parameters, d1_candles=d1_candles)
-    else:
-        # Fallback: dùng strategy.analyze() cho các chiến lược khác
-        # (chậm hơn nhưng đúng)
-        pass
-
-    _update_progress(25, "Đang simulate giao dịch...")
-
-    # ── Tìm start_idx ─────────────────────────────────────────────────────────
-    # Bước 1: tìm nến đầu tiên >= start_ms (ngày người dùng chọn)
-    first_date_idx = lookback
-    for i, c in enumerate(all_candles):
-        if c[0] >= start_ms and i >= lookback:
-            first_date_idx = i
-            break
-    if first_date_idx < lookback:
-        first_date_idx = lookback
-
-    # Bước 2: với ADTS, đẩy start_idx về phía sau cho đến khi calib_sideway không NaN
-    # Đảm bảo không bắt đầu giao dịch khi calibration chưa sẵn sàng
-    if strategy_name == "adts" and "_calib_sideway" in df.columns:
-        import numpy as np
-        calib_arr = df["_calib_sideway"].to_numpy()
-        # Tìm index đầu tiên trong df có calib_sideway hợp lệ (không NaN)
-        first_valid_calib_idx = next(
-            (idx for idx in range(first_date_idx, len(calib_arr))
-             if not (isinstance(calib_arr[idx], float) and np.isnan(calib_arr[idx]))),
-            None
-        )
-        if first_valid_calib_idx is None:
-            raise ValueError(
-                "Không có nến nào có calib_sideway hợp lệ trong khoảng thời gian backtest. "
-                "Hãy mở rộng khoảng thời gian hoặc giảm bbwidth_sma_period."
-            )
-        start_idx = first_valid_calib_idx
-        if start_idx > first_date_idx:
-            skipped_candles = start_idx - first_date_idx
-            skip_days = skipped_candles * _timeframe_ms(timeframe) / 86400_000
-            logger.info(
-                f"Backtest [{job_id}] ADTS warmup: bỏ qua {skipped_candles} nến đầu "
-                f"(~{skip_days:.1f} ngày) cho đến khi calib_sideway sẵn sàng "
-                f"tại idx={start_idx} ts={_to_utc7_str(all_candles[start_idx][0])}"
-            )
-            _update_progress(26, f"ADTS warmup: bắt đầu simulate từ {_to_utc7_str(all_candles[start_idx][0])}")
-    else:
-        start_idx = first_date_idx
-
-    # ── Simulation loop ───────────────────────────────────────────────────────
-    balance = initial_balance
-    open_position = None
-    trades = []
-    equity_curve = [{"ts": all_candles[start_idx][0], "balance": balance, "pnl_cum": 0.0, "drawdown_pct": 0.0}]
-    # Dense equity curve: ghi nhận balance (bao gồm unrealized PnL) tại MỌI nến
-    # Dùng để tính MDD chính xác, bao gồm cả drawdown trong lúc đang giữ lệnh
-    dense_equity: list[dict] = []
-    peak_balance = balance
-    last_entry_phase: dict = {}
-
-    simulate_range = [i for i in range(start_idx, len(all_candles)) if all_candles[i][0] <= end_ms]
-    total_sim = len(simulate_range)
-
-    for loop_idx, i in enumerate(simulate_range):
-        candle = all_candles[i]
-        ts_ms = candle[0]
-
-        # Progress update mỗi 5%
-        if total_sim > 0 and loop_idx % max(1, total_sim // 20) == 0:
-            pct = 25 + int(loop_idx / total_sim * 65)
-            _update_progress(pct, f"Simulate nến {loop_idx+1}/{total_sim}...")
-
-        # ── Ghi nhận equity tại mỗi nến (bao gồm unrealized PnL) ─────────────
-        # Dùng giá close của nến hiện tại để ước tính unrealized PnL
-        candle_close = candle[4]
-        if open_position:
-            pos_pv = open_position["position_value"]
-            pos_ep = open_position["entry_price"]
-            if pos_ep > 0:
-                if open_position["side"] == "long":
-                    unrealized_pct = (candle_close - pos_ep) / pos_ep
-                else:
-                    unrealized_pct = (pos_ep - candle_close) / pos_ep
-                unrealized_pnl = pos_pv * unrealized_pct
-            else:
-                unrealized_pnl = 0.0
-        else:
-            unrealized_pnl = 0.0
-        equity_now = balance + unrealized_pnl
-        dense_equity.append({"ts": ts_ms, "equity": equity_now})
-
-        # ── Lấy signal ────────────────────────────────────────────────────────
-        if strategy_name in ("sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3", "sma_macd_cross_v4", "sma_macd_cross_v5", "sma_macd_cross_v6") and i >= 2:
-            sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters, strategy_name)
-        elif strategy_name == "sma_macd_cross_v7" and i >= 2:
-            sig = _simulate_sma_macd_v7_candle(df, i, open_position, last_entry_phase, parameters)
-            sig = _simulate_sma_macd_candle(df, i, open_position, last_entry_phase, parameters, strategy_name)
-        elif strategy_name == "adts" and i >= 2:
-            sig = _simulate_adts_candle(df, i, open_position, parameters)
-        else:
-            # Fallback: gọi strategy.analyze() (chậm)
-            ohlcv_slice = all_candles[max(0, i - lookback * 2): i + 1]
-            sim_pos = []
-            if open_position:
-                sim_pos = [{"symbol": symbol, "side": open_position["side"],
-                            "size": open_position["size"], "entry_price": open_position["entry_price"],
-                            "metadata": open_position.get("metadata", {})}]
-            try:
-                strategy = _build_strategy(strategy_name, parameters)
-                signal_obj = await strategy.analyze(symbol, ohlcv_slice, sim_pos)
-                sig_type = signal_obj.signal if not signal_obj.is_none else "none"
-                sig = {"type": sig_type, "price": signal_obj.price, "metadata": signal_obj.metadata or {}}
-            except Exception as e:
-                logger.warning(f"Strategy error at candle {i}: {e}")
-                continue
-
-        sig_type = sig.get("type", "none")
-
-        # ── Entry ─────────────────────────────────────────────────────────────
-        if sig_type in ("long", "short") and open_position is None:
-            signal_entry_price = sig.get("price") or candle[4]
-            if not signal_entry_price or signal_entry_price <= 0:
-                signal_entry_price = candle[4]
-
-            # Áp dụng slippage tại thời điểm khớp lệnh:
-            #   Long  → mua cao hơn tín hiệu (bất lợi)
-            #   Short → bán thấp hơn tín hiệu (bất lợi)
-            if slippage_pct > 0 and sig_type == "long":
-                entry_price = signal_entry_price * (1.0 + slippage_pct)
-            elif slippage_pct > 0 and sig_type == "short":
-                entry_price = signal_entry_price * (1.0 - slippage_pct)
-            else:
-                entry_price = signal_entry_price
-
-            # V4: dung notional_usdt co dinh thay vi % balance
-            notional_usdt = float(parameters.get("notional_usdt", 0))
-            if notional_usdt > 0:
-                position_value = notional_usdt
-            else:
-                position_value = balance * position_size_pct * leverage
-            size = position_value / entry_price
-            # Hoa hồng entry = position_value × commission_pct
-            fee = position_value * commission_pct
-            # Chi phí trượt giá entry (USDT) = |filled - signal| × size
-            entry_slippage_cost = abs(entry_price - signal_entry_price) * size
-            open_position = {
-                "side": sig_type, "entry_price": entry_price, "size": size,
-                "position_value": position_value, "entry_fee": fee,
-                "entry_slippage_cost": entry_slippage_cost,
-                "entry_ts": ts_ms, "entry_candle_idx": i,
-                "metadata": sig.get("metadata") or {},
-            }
-            # ADTS: lưu SL/TP1/trailing từ signal
-            if strategy_name == "adts":
-                open_position["stop_loss"]           = sig.get("stop_loss", 0)
-                open_position["take_profit_1"]       = sig.get("take_profit_1", 0)
-                open_position["trailing_stop"]       = sig.get("trailing_stop_init", 0)
-                open_position["atr_at_entry"]        = sig.get("atr_at_entry", 0)
-                open_position["tp1_hit"]             = False
-                open_position["is_emergency_closed"] = False   # flag chống lặp Emergency Exit
-                open_position["amount_remaining_pct"] = 1.0    # 100% còn lại
-            balance -= fee
-            # One-shot tracking
-            phase_ts = (sig.get("metadata") or {}).get("sig_phase_start_ts")
-            if phase_ts:
-                last_entry_phase[sig_type] = phase_ts
-
-        # ── Exit ──────────────────────────────────────────────────────────────
-        elif sig_type in ("close_long", "close_short") and open_position is not None:
-            exit_price = sig.get("price") or candle[4]
-            if not exit_price or exit_price <= 0:
-                exit_price = candle[4]
-
-            # Áp dụng slippage tại thời điểm khớp lệnh:
-            #   Đóng Long  → bán thấp hơn tín hiệu (bất lợi)
-            #   Đóng Short → mua cao hơn tín hiệu (bất lợi)
-            if slippage_pct > 0:
-                if sig_type == "close_long":
-                    exit_price = exit_price * (1.0 - slippage_pct)
-                else:
-                    exit_price = exit_price * (1.0 + slippage_pct)
-
-            pos = open_position
-            pv = pos["position_value"]
-            # Lay leverage thuc te: V4 dung leverage_v4, cac version khac dung leverage
-            eff_leverage = float(parameters.get("leverage_v4", 0)) or leverage
-
-            # ADTS: xử lý partial close (TP1 chốt 50%, Emergency chốt 50%)
-            is_partial  = sig.get("partial", False)
-            partial_pct = float(sig.get("partial_pct", 1.0))
-
-            # ── Kiểm tra min_notional ─────────────────────────────────────────
-            # Nếu phần còn lại sau partial close < min_notional → đóng toàn bộ
-            # Tránh tình trạng giữ lệnh với notional quá nhỏ (dưới mức tối thiểu sàn)
-            if is_partial:
-                min_notional = float(parameters.get("min_notional", 5.0))
-                remaining_pv = pv * (1.0 - partial_pct)
-                if remaining_pv < min_notional:
-                    is_partial  = False
-                    partial_pct = 1.0
-                    # Cập nhật reason để phản ánh việc upgrade lên full close
-                    original_reason = sig.get("reason", "")
-                    sig = dict(sig)
-                    sig["reason"] = (
-                        f"{original_reason} → Full Close "
-                        f"(còn lại {remaining_pv:.2f} USDT < min_notional {min_notional:.2f} USDT)"
-                    )
-
-            # Tính PnL trên phần đóng
-            close_pv = pv * partial_pct if is_partial else pv
-
-            if pos["side"] == "long":
-                price_change_pct = (exit_price - pos["entry_price"]) / pos["entry_price"]
-            else:
-                price_change_pct = (pos["entry_price"] - exit_price) / pos["entry_price"]
-
-            gross_pnl = close_pv * price_change_pct
-            # Hoa hồng exit = close_pv × commission_pct
-            exit_fee  = close_pv * commission_pct
-            # entry_fee tính theo tỷ lệ đóng
-            entry_fee_portion = pos["entry_fee"] * partial_pct
-            net_pnl = gross_pnl - entry_fee_portion - exit_fee
-
-            margin = close_pv / eff_leverage
-            pnl_pct = net_pnl / margin * 100 if margin > 0 else 0.0
-            balance += net_pnl
-            holding_candles = i - pos["entry_candle_idx"]
-
-            trades.append({
-                "entry_time": _to_utc7_str(pos["entry_ts"]),
-                "exit_time":  _to_utc7_str(ts_ms),
-                "entry_ts_ms": pos["entry_ts"],
-                "exit_ts_ms":  ts_ms,
-                "symbol": symbol, "side": pos["side"],
-                "entry_price": pos["entry_price"], "exit_price": exit_price,
-                "size": round(pos["size"] * partial_pct, 6),
-                "pnl": round(net_pnl, 4), "pnl_pct": round(pnl_pct, 2),
-                "balance_after": round(balance, 4),
-                "holding_candles": holding_candles,
-                "exit_reason": sig.get("reason", ""),
-                # Chi phí giao dịch (đã khấu trừ vào net_pnl)
-                "commission": round(entry_fee_portion + exit_fee, 6),
-                "slippage_cost": round(
-                    pos.get("entry_slippage_cost", 0.0) * partial_pct
-                    + abs(exit_price - sig.get("price", exit_price)) * pos["size"] * partial_pct,
-                    6
-                ),
-            })
-            pnl_cum = balance - initial_balance
-            peak_balance = max(peak_balance, balance)
-            drawdown_pct = (peak_balance - balance) / peak_balance * 100 if peak_balance > 0 else 0.0
-            equity_curve.append({"ts": ts_ms, "balance": round(balance, 4),
-                                  "pnl_cum": round(pnl_cum, 4), "drawdown_pct": round(drawdown_pct, 2)})
-
-            if is_partial:
-                # Cập nhật position: giảm size và position_value, giữ lệnh
-                open_position["position_value"]      = pv * (1.0 - partial_pct)
-                open_position["size"]                = pos["size"] * (1.0 - partial_pct)
-                open_position["entry_fee"]           = pos["entry_fee"] * (1.0 - partial_pct)
-                open_position["entry_slippage_cost"] = pos.get("entry_slippage_cost", 0.0) * (1.0 - partial_pct)
-                # Không xóa open_position — lệnh vẫn còn
-            else:
-                open_position = None
-
-    _update_progress(92, "Đang tính thống kê...")
-
-    # ── Summary stats — dung _calc_metrics() tu Analytics Service ────────────
-    # Cung cong thuc voi live trading → ket qua nhat quan 100%.
-    mock_trades = _build_mock_trades(trades)
-    analytics   = _analytics_calc_metrics(mock_trades)
-
-    total_trades = analytics.total_trades
-    win_count    = analytics.winning_trades
-    loss_count   = analytics.losing_trades
-    win_rate     = analytics.win_rate_pct
-    total_pnl    = analytics.net_pnl
-    gross_profit = analytics.gross_profit
-    gross_loss   = analytics.gross_loss
-    profit_factor = analytics.profit_factor if analytics.profit_factor is not None else 999.0
-    avg_win  = round(gross_profit / win_count,  4) if win_count  > 0 else 0.0
-    avg_loss = round(-gross_loss  / loss_count, 4) if loss_count > 0 else 0.0
-    largest_win  = analytics.best_trade
-    largest_loss = analytics.worst_trade
-    avg_holding  = round(
-        sum(t.get("holding_candles", 0) for t in trades) / total_trades, 1
-    ) if total_trades > 0 else 0.0
-    total_return_pct = round((balance - initial_balance) / initial_balance * 100, 2)
-
-    # ── MDD từ Equity Curve liên tục (bao gồm unrealized PnL) ────────────────
-    # Đây là MDD thực tế mà trader phải chịu đựng khi bot chạy live
-    # Khác với MDD từ trade list (chỉ tính tại điểm đóng lệnh)
-    if dense_equity:
-        eq_values = [e["equity"] for e in dense_equity]
-        eq_ts     = [e["ts"]     for e in dense_equity]
-
-        # Tính MDD: duyệt qua từng điểm, theo dõi peak và trough
-        peak_eq   = eq_values[0]
-        mdd_pct   = 0.0          # Max Drawdown %
-        mdd_usdt  = 0.0          # Max Drawdown tuyệt đối (USDT)
-        mdd_peak_ts   = eq_ts[0]
-        mdd_trough_ts = eq_ts[0]
-        mdd_peak_val  = eq_values[0]
-        mdd_trough_val = eq_values[0]
-
-        cur_peak     = eq_values[0]
-        cur_peak_ts  = eq_ts[0]
-        cur_peak_val = eq_values[0]
-
-        for ts_i, eq_i in zip(eq_ts, eq_values):
-            if eq_i > cur_peak:
-                cur_peak     = eq_i
-                cur_peak_ts  = ts_i
-                cur_peak_val = eq_i
-            dd_pct  = (cur_peak - eq_i) / cur_peak * 100 if cur_peak > 0 else 0.0
-            dd_usdt = cur_peak - eq_i
-            if dd_pct > mdd_pct:
-                mdd_pct        = dd_pct
-                mdd_usdt       = dd_usdt
-                mdd_peak_ts    = cur_peak_ts
-                mdd_trough_ts  = ts_i
-                mdd_peak_val   = cur_peak_val
-                mdd_trough_val = eq_i
-
-        mdd_pct  = round(mdd_pct, 2)
-        mdd_usdt = round(mdd_usdt, 4)
-
-        # MDD Duration: thời gian từ peak → trough (ngày)
-        mdd_duration_days = round(
-            (mdd_trough_ts - mdd_peak_ts) / 86_400_000, 1
-        ) if mdd_trough_ts > mdd_peak_ts else 0.0
-
-        # MDD Recovery: thời gian từ trough đến khi equity vượt lại peak (ngày)
-        # Tìm điểm đầu tiên sau trough mà equity >= mdd_peak_val
-        recovery_ts = None
-        for ts_i, eq_i in zip(eq_ts, eq_values):
-            if ts_i > mdd_trough_ts and eq_i >= mdd_peak_val:
-                recovery_ts = ts_i
-                break
-        if recovery_ts is not None:
-            mdd_recovery_days = round((recovery_ts - mdd_trough_ts) / 86_400_000, 1)
-        else:
-            mdd_recovery_days = None  # Chưa hồi phục trong khoảng backtest
-
-        # MDD từ trade list (điểm đóng lệnh) — giữ lại để so sánh
-        peak_trade = initial_balance
-        max_dd_trade = 0.0
-        for t in trades:
-            peak_trade = max(peak_trade, t["balance_after"])
-            dd = (peak_trade - t["balance_after"]) / peak_trade * 100 if peak_trade > 0 else 0.0
-            max_dd_trade = max(max_dd_trade, dd)
-        max_drawdown_pct = round(max_dd_trade, 2)  # backward compat
-
-    else:
-        # Không có dữ liệu dense equity (không có lệnh nào)
-        mdd_pct = 0.0
-        mdd_usdt = 0.0
-        mdd_duration_days = 0.0
-        mdd_recovery_days = None
-        mdd_peak_ts = mdd_trough_ts = 0
-        mdd_peak_val = mdd_trough_val = initial_balance
-        max_drawdown_pct = 0.0
-    if len(trades) > 1:
-        returns = [t["pnl_pct"] / 100 for t in trades]
-        mean_r = sum(returns) / len(returns)
-        std_r  = math.sqrt(sum((r - mean_r) ** 2 for r in returns) / len(returns))
-        tf_per_day = 86400_000 / tf_ms
-        annual_factor = math.sqrt(tf_per_day * 252)
-        sharpe = round((mean_r / std_r * annual_factor) if std_r > 0 else 0.0, 3)
-    else:
-        sharpe = 0.0
-
-    summary = {
-        "total_trades": total_trades, "winning_trades": win_count, "losing_trades": loss_count,
-        "win_rate": win_rate, "total_pnl": round(total_pnl, 4), "total_return_pct": total_return_pct,
-        "max_drawdown_pct": max_drawdown_pct, "profit_factor": profit_factor,
-        "avg_win": avg_win, "avg_loss": avg_loss,
-        "largest_win": largest_win, "largest_loss": largest_loss,
-        "avg_holding_candles": avg_holding, "sharpe_ratio": sharpe,
-        "initial_balance": initial_balance, "final_balance": round(balance, 4),
-        "total_commission": round(sum(t.get("commission", 0.0) for t in trades), 4),
-        "total_slippage_cost": round(sum(t.get("slippage_cost", 0.0) for t in trades), 4),
-        "commission_pct": commission_pct,
-        "slippage_pct": slippage_pct,
-        # MDD từ Equity Curve liên tục
-        "mdd_equity_pct":       mdd_pct,
-        "mdd_equity_usdt":      mdd_usdt,
-        "mdd_duration_days":    mdd_duration_days,
-        "mdd_recovery_days":    mdd_recovery_days,
-        "mdd_peak_ts":          _to_utc7_str(mdd_peak_ts)   if mdd_peak_ts   else "",
-        "mdd_trough_ts":        _to_utc7_str(mdd_trough_ts) if mdd_trough_ts else "",
-        "mdd_peak_balance":     round(mdd_peak_val, 4),
-        "mdd_trough_balance":   round(mdd_trough_val, 4),
-    }
-    # ── Integrity validation ──────────────────────────────────────────────────
-    integrity = validate_backtest_integrity(trades, initial_balance)
-    if integrity["violations"]:
-        logger.warning(
-            f"Backtest [{job_id}] integrity: {integrity['violation_count']} vi phạm — "
-            + "; ".join(v["message"] for v in integrity["violations"][:3])
-        )
-    summary["integrity"] = integrity
-
-    return {"symbol": symbol, "timeframe": timeframe, "trades": trades,
-            "equity_curve": equity_curve, "dense_equity": dense_equity, "summary": summary,
-            "chart_data": _build_chart_data(df, all_candles, trades, strategy_name, start_ms, end_ms)}
-
-
 # ── Chart data builder ───────────────────────────────────────────────────────
 
 def _build_chart_data(df, all_candles: list, trades: list, strategy_name: str,
@@ -2261,21 +1657,448 @@ def _create_excel(bot, result, start_date, end_date, filepath):
     logger.info(f"Excel saved: {filepath}")
 
 
+# ── Core Engine Job Runner (INF-002) ─────────────────────────────────────────
+
+async def _run_engine_job(
+    job_id:          str,
+    strategy_name:   str,
+    parameters:      dict,
+    symbol:          str,
+    initial_balance: float,
+    start_ms:        int,
+    end_ms:          int,
+) -> dict:
+    """Chạy backtest qua BacktestEngine mới — không cần exchange connection.
+
+    Đọc dữ liệu từ DB cache, truyền vào BacktestEngine.run() với sliding window.
+    Map BacktestResult → legacy result dict để frontend không cần thay đổi.
+
+    Args:
+        job_id: ID job để cập nhật progress.
+        strategy_name: Tên strategy (từ StrategyFactory registry).
+        parameters: Dict tham số strategy.
+        symbol: Symbol giao dịch (vd: "BTC/USDT").
+        initial_balance: Vốn ban đầu (USDT).
+        start_ms: Timestamp bắt đầu simulate (ms).
+        end_ms: Timestamp kết thúc simulate (ms).
+
+    Returns:
+        Legacy result dict tương thích với frontend hiện tại.
+
+    Raises:
+        ValueError: Nếu không đủ dữ liệu cache hoặc tham số không hợp lệ.
+    """
+    def _upd(pct: int, msg: str) -> None:
+        if job_id and job_id in _jobs:
+            _jobs[job_id]["progress"] = pct
+            _jobs[job_id]["message"]  = msg
+
+    timeframe = parameters.get("timeframe", "5m")
+    tf_ms     = _timeframe_ms(timeframe)
+
+    # Tính lookback qua strategy contract — không hardcode
+    lookback = _get_lookback(strategy_name, parameters)
+    warmup_start_ms = start_ms - (lookback * tf_ms)
+
+    _upd(5, f"Đang kiểm tra dữ liệu {symbol} {timeframe}...")
+
+    from src.data.ohlcv_service import (
+        get_candles as _db_get_candles,
+        get_data_range as _db_get_range,
+    )
+
+    db_range = await _db_get_range(strategy_name, symbol, timeframe)
+    _validate_db_range(db_range, symbol, timeframe, strategy_name, warmup_start_ms, end_ms, tf_ms)
+
+    _upd(8, f"Đọc dữ liệu từ DB cache ({db_range['count']} nến)...")
+    all_candles = await _db_get_candles(strategy_name, symbol, timeframe, warmup_start_ms, end_ms)
+
+    _validate_candle_count(all_candles, lookback, warmup_start_ms, end_ms, tf_ms)
+
+    _upd(15, f"Đã tải {len(all_candles)} nến. Khởi tạo BacktestEngine...")
+
+    # Tạo BacktestConfig từ parameters
+    config = BacktestConfig(
+        strategy_name=strategy_name,
+        parameters=parameters,
+        symbol=symbol,
+        initial_balance=initial_balance,
+        leverage=int(parameters.get("leverage", 5)),
+        position_size_pct=float(parameters.get("position_size_pct", 0.10)),
+        commission_pct=float(parameters.get("commission_pct", COMMISSION)),
+        slippage_pct=float(parameters.get("slippage_pct", 0.0)),
+    )
+
+    engine = BacktestEngine(config)
+
+    # ── ADTS: Pre-calibrate từ D1 cache trước khi simulate ───────────────────
+    # ADTS cần BBWidth SMA(200) trên D1 để calibrate Shield threshold.
+    # Sliding window 5m chỉ cho ~7 ngày D1 — không đủ (cần >=224).
+    # Giải pháp: load D1 cache riêng (adts/<symbol>/1d) và pre-seed calibration
+    # TRƯỚC engine.run() để không rơi vào Tầng 3 (hardcoded default).
+    # d1_end_ms = start_ms: tránh look-ahead bias (không dùng data sau ngày BT bắt đầu).
+    if strategy_name == "adts":
+        _upd(17, "Dang pre-calibrate ADTS tu D1 cache...")
+        _bbwidth_sma = int(parameters.get("bbwidth_sma_period", 200))
+        _atr_p       = int(parameters.get("atr_period", 14))
+        _d1_needed   = _bbwidth_sma + _atr_p + 10 + 50   # +50 buffer
+        _d1_end_ms   = start_ms                           # no look-ahead
+        _d1_start_ms = _d1_end_ms - (_d1_needed + 30) * 86_400_000
+
+        _d1_candles = await _db_get_candles(
+            strategy_name, symbol, "1d", _d1_start_ms, _d1_end_ms
+        )
+        if _d1_candles:
+            _seeded = engine._strategy.seed_d1_calibration(_d1_candles, symbol)
+            if not _seeded:
+                logger.warning(
+                    f"[_run_engine_job] ADTS pre-calibration FAIL "
+                    f"({len(_d1_candles)} D1 candles, need >={_bbwidth_sma + _atr_p + 10}) "
+                    f"— backtest se dung hardcoded calibration"
+                )
+        else:
+            logger.warning(
+                f"[_run_engine_job] Khong co D1 cache cho {strategy_name}/{symbol}/1d "
+                f"— ADTS se dung hardcoded calibration. "
+                f"Vao Market Data -> Cap nhat tat ca."
+            )
+
+    _upd(20, "Dang simulate giao dich...")
+    result = await engine.run(all_candles, start_ts=start_ms, end_ts=end_ms)
+
+    _upd(88, "Đang tính thống kê...")
+
+    # Map BacktestResult → legacy format
+    return _map_result_to_legacy(
+        result=result,
+        all_candles=all_candles,
+        parameters=parameters,
+        symbol=symbol,
+        timeframe=timeframe,
+        initial_balance=initial_balance,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        strategy_name=strategy_name,
+    )
+
+
+def _validate_db_range(
+    db_range:        dict,
+    symbol:          str,
+    timeframe:       str,
+    strategy_name:   str,
+    warmup_start_ms: int,
+    end_ms:          int,
+    tf_ms:           int,
+) -> None:
+    """Kiểm tra DB cache có đủ dữ liệu không — raise ValueError nếu thiếu.
+
+    Args:
+        db_range: Kết quả từ get_data_range().
+        symbol: Symbol giao dịch.
+        timeframe: Timeframe.
+        strategy_name: Tên strategy.
+        warmup_start_ms: Timestamp bắt đầu warmup (ms).
+        end_ms: Timestamp kết thúc (ms).
+        tf_ms: Milliseconds mỗi nến.
+
+    Raises:
+        ValueError: Nếu thiếu dữ liệu.
+    """
+    if db_range["count"] == 0 or db_range["min_ts"] is None:
+        raise ValueError(
+            f"❌ Chưa có dữ liệu cache cho {strategy_name}/{symbol}/{timeframe}.\n"
+            f"Vào tab 'Market Data' → nhấn 'Cập nhật tất cả' để tải data trước khi backtest."
+        )
+    if db_range["min_ts"] > warmup_start_ms:
+        raise ValueError(
+            f"❌ Dữ liệu cache không đủ warmup cho {strategy_name}/{symbol}/{timeframe}.\n"
+            f"DB hiện có từ: {db_range['min_date']}\n"
+            f"→ Hãy chạy 'Full Refresh' trong tab Market Data."
+        )
+    # Cho phép lag tối đa 24 nến (2 giờ với 5m) so với end_ms.
+    # Lý do: nến cuối ngày chưa đóng + delay OHLCV collector (~60s/cycle)
+    # khiến DB max_ts có thể thiếu ~35 phút so với end_ms=23:59:59.
+    # tf_ms * 3 (15 phút) quá chặt → false-negative khi backtest ngày hiện tại hoặc hôm qua.
+    # tf_ms * 24 (2 giờ) đủ buffer mà vẫn catch đúng khi data thực sự thiếu (> 1 ngày).
+    max_lag_ms = tf_ms * 24
+    if db_range["max_ts"] < end_ms - max_lag_ms:
+        raise ValueError(
+            f"❌ Dữ liệu cache chưa cập nhật đến ngày kết thúc backtest.\n"
+            f"DB hiện có đến: {db_range['max_date']}\n"
+            f"→ Vào tab 'Market Data' → nhấn 'Cập nhật tất cả'."
+        )
+
+
+def _validate_candle_count(
+    all_candles:     list,
+    lookback:        int,
+    warmup_start_ms: int,
+    end_ms:          int,
+    tf_ms:           int,
+) -> None:
+    """Kiểm tra số nến thực tế có đủ không — raise ValueError nếu thiếu.
+
+    Args:
+        all_candles: Danh sách nến đã đọc từ DB.
+        lookback: Số nến warmup tối thiểu.
+        warmup_start_ms: Timestamp bắt đầu warmup (ms).
+        end_ms: Timestamp kết thúc (ms).
+        tf_ms: Milliseconds mỗi nến.
+
+    Raises:
+        ValueError: Nếu thiếu nến hoặc có gap.
+    """
+    min_required = lookback + 1
+    if len(all_candles) < min_required:
+        raise ValueError(
+            f"Không đủ dữ liệu: có {len(all_candles)} nến, cần ≥{min_required}."
+        )
+    expected = int((end_ms - warmup_start_ms) / tf_ms)
+    if expected > 0:
+        gap_pct = (expected - len(all_candles)) / expected * 100
+        if gap_pct > 1.0:
+            raise ValueError(
+                f"❌ Phát hiện gap trong dữ liệu cache.\n"
+                f"Kỳ vọng ~{expected} nến, thực tế {len(all_candles)} nến "
+                f"(thiếu {gap_pct:.1f}%).\n"
+                f"→ Vào tab 'Market Data' → nhấn 'Full Refresh'."
+            )
+
+
+def _map_result_to_legacy(
+    result:          "BacktestResult",  # type: ignore[name-defined]
+    all_candles:     list,
+    parameters:      dict,
+    symbol:          str,
+    timeframe:       str,
+    initial_balance: float,
+    start_ms:        int,
+    end_ms:          int,
+    strategy_name:   str,
+) -> dict:
+    """Map BacktestResult → legacy result dict tương thích với frontend.
+
+    Chuyển đổi TradeRecord list và BacktestMetrics sang format cũ mà
+    _run_job, _run_job_strategy và _create_excel đang dùng.
+
+    Args:
+        result: BacktestResult từ engine.run().
+        all_candles: Toàn bộ nến (dùng cho chart_data).
+        parameters: Dict tham số strategy.
+        symbol: Symbol giao dịch.
+        timeframe: Timeframe.
+        initial_balance: Vốn ban đầu.
+        start_ms: Timestamp bắt đầu simulate (ms).
+        end_ms: Timestamp kết thúc simulate (ms).
+        strategy_name: Tên strategy.
+
+    Returns:
+        Legacy result dict với keys: symbol, timeframe, trades, equity_curve,
+        dense_equity, summary, chart_data.
+    """
+    commission_pct = float(parameters.get("commission_pct", COMMISSION))
+    slippage_pct   = float(parameters.get("slippage_pct", 0.0))
+    leverage       = int(parameters.get("leverage", 5))
+    pos_size_pct   = float(parameters.get("position_size_pct", 0.10))
+
+    # Tính balance running để điền balance_after cho từng trade
+    balance = initial_balance
+    trades_legacy: list[dict] = []
+    for t in result.trades:
+        balance += t.pnl_net
+        pv = initial_balance * pos_size_pct * leverage
+        size = pv / t.entry_price if t.entry_price > 0 else 0.0
+        pnl_pct = t.pnl_net / (pv / leverage) * 100 if pv > 0 and leverage > 0 else 0.0
+        holding = max(0, int((t.exit_ts - t.entry_ts) / _timeframe_ms(timeframe)))
+        trades_legacy.append({
+            "entry_time":     _to_utc7_str(t.entry_ts),
+            "exit_time":      _to_utc7_str(t.exit_ts),
+            "entry_ts_ms":    t.entry_ts,
+            "exit_ts_ms":     t.exit_ts,
+            "symbol":         symbol,
+            "side":           t.side,
+            "entry_price":    t.entry_price,
+            "exit_price":     t.exit_price,
+            "size":           round(t.amount, 6),
+            "pnl":            t.pnl_net,
+            "pnl_pct":        round(pnl_pct, 2),
+            "balance_after":  round(balance, 4),
+            "holding_candles": holding,
+            "exit_reason":    t.reason,
+            "commission":     t.commission,
+            "slippage_cost":  0.0,
+        })
+
+    # Equity curve: map từ dense equity_curve của engine
+    equity_curve_legacy: list[dict] = []
+    peak_bal = initial_balance
+    for eq in result.equity_curve:
+        pnl_cum = eq["equity"] - initial_balance
+        peak_bal = max(peak_bal, eq["equity"])
+        dd_pct = (peak_bal - eq["equity"]) / peak_bal * 100 if peak_bal > 0 else 0.0
+        equity_curve_legacy.append({
+            "ts":          eq["ts"],
+            "balance":     eq["equity"],
+            "pnl_cum":     round(pnl_cum, 4),
+            "drawdown_pct": round(dd_pct, 2),
+        })
+
+    m = result.metrics
+    final_balance = initial_balance + m.net_pnl
+    total_return_pct = round((final_balance - initial_balance) / initial_balance * 100, 2)
+
+    # MDD từ dense equity curve
+    eq_values = [e["equity"] for e in result.equity_curve]
+    eq_ts_list = [e["ts"] for e in result.equity_curve]
+    mdd_pct, mdd_usdt, mdd_peak_ts, mdd_trough_ts, mdd_peak_val, mdd_trough_val = (
+        _calc_mdd_details(eq_values, eq_ts_list, initial_balance)
+    )
+
+    # MDD recovery
+    mdd_recovery_days = _calc_mdd_recovery(eq_values, eq_ts_list, mdd_trough_ts, mdd_peak_val)
+    mdd_duration_days = round((mdd_trough_ts - mdd_peak_ts) / 86_400_000, 1) if mdd_trough_ts > mdd_peak_ts else 0.0
+
+    summary = {
+        "total_trades":       m.total_trades,
+        "winning_trades":     m.winning_trades,
+        "losing_trades":      m.losing_trades,
+        "win_rate":           m.win_rate_pct,
+        "total_pnl":          round(m.net_pnl, 4),
+        "total_return_pct":   total_return_pct,
+        "max_drawdown_pct":   round(mdd_pct, 2),
+        "profit_factor":      m.profit_factor if m.profit_factor is not None else 999.0,
+        "avg_win":            round(m.gross_profit / m.winning_trades, 4) if m.winning_trades > 0 else 0.0,
+        "avg_loss":           round(-m.gross_loss / m.losing_trades, 4) if m.losing_trades > 0 else 0.0,
+        "largest_win":        m.best_trade,
+        "largest_loss":       m.worst_trade,
+        "avg_holding_candles": round(
+            sum(t.get("holding_candles", 0) for t in trades_legacy) / m.total_trades, 1
+        ) if m.total_trades > 0 else 0.0,
+        "sharpe_ratio":       m.sharpe_ratio or 0.0,
+        "initial_balance":    initial_balance,
+        "final_balance":      round(final_balance, 4),
+        "total_commission":   m.total_commission,
+        "total_slippage_cost": 0.0,
+        "commission_pct":     commission_pct,
+        "slippage_pct":       slippage_pct,
+        # MDD từ Equity Curve liên tục
+        "mdd_equity_pct":     mdd_pct,
+        "mdd_equity_usdt":    mdd_usdt,
+        "mdd_duration_days":  mdd_duration_days,
+        "mdd_recovery_days":  mdd_recovery_days,
+        "mdd_peak_ts":        _to_utc7_str(mdd_peak_ts) if mdd_peak_ts else "",
+        "mdd_trough_ts":      _to_utc7_str(mdd_trough_ts) if mdd_trough_ts else "",
+        "mdd_peak_balance":   round(mdd_peak_val, 4),
+        "mdd_trough_balance": round(mdd_trough_val, 4),
+        "integrity":          validate_backtest_integrity(trades_legacy, initial_balance),
+    }
+
+    # Chart data — build từ pre-computed SMA+MACD nếu có, fallback về candles only
+    import pandas as pd
+    df_chart = pd.DataFrame(
+        all_candles, columns=["timestamp", "open", "high", "low", "close", "volume"]
+    )
+    if strategy_name in (
+        "sma_macd_cross", "sma_macd_cross_v2", "sma_macd_cross_v3",
+        "sma_macd_cross_v4", "sma_macd_cross_v5", "sma_macd_cross_v6",
+        "sma_macd_cross_v7",
+    ):
+        df_chart = _precompute_sma_macd(df_chart, parameters)
+
+    chart_data = _build_chart_data(df_chart, all_candles, trades_legacy, strategy_name, start_ms, end_ms)
+
+    return {
+        "symbol":       symbol,
+        "timeframe":    timeframe,
+        "trades":       trades_legacy,
+        "equity_curve": equity_curve_legacy,
+        "dense_equity": [{"ts": e["ts"], "equity": e["equity"]} for e in result.equity_curve],
+        "summary":      summary,
+        "chart_data":   chart_data,
+    }
+
+
+def _calc_mdd_details(
+    eq_values:     list[float],
+    eq_ts_list:    list[int],
+    initial_balance: float,
+) -> tuple[float, float, int, int, float, float]:
+    """Tính chi tiết Max Drawdown từ equity curve.
+
+    Args:
+        eq_values: Danh sách giá trị equity.
+        eq_ts_list: Danh sách timestamp tương ứng.
+        initial_balance: Vốn ban đầu.
+
+    Returns:
+        Tuple (mdd_pct, mdd_usdt, peak_ts, trough_ts, peak_val, trough_val).
+    """
+    if not eq_values:
+        return 0.0, 0.0, 0, 0, initial_balance, initial_balance
+
+    peak = eq_values[0]
+    peak_ts = eq_ts_list[0]
+    peak_val = eq_values[0]
+    cur_peak = eq_values[0]
+    cur_peak_ts = eq_ts_list[0]
+    mdd_pct = 0.0
+    mdd_usdt = 0.0
+    trough_ts = eq_ts_list[0]
+    trough_val = eq_values[0]
+
+    for ts_i, eq_i in zip(eq_ts_list, eq_values):
+        if eq_i > cur_peak:
+            cur_peak = eq_i
+            cur_peak_ts = ts_i
+        dd_pct  = (cur_peak - eq_i) / cur_peak * 100 if cur_peak > 0 else 0.0
+        dd_usdt = cur_peak - eq_i
+        if dd_pct > mdd_pct:
+            mdd_pct    = dd_pct
+            mdd_usdt   = dd_usdt
+            peak_ts    = cur_peak_ts
+            trough_ts  = ts_i
+            peak_val   = cur_peak
+            trough_val = eq_i
+
+    return round(mdd_pct, 2), round(mdd_usdt, 4), peak_ts, trough_ts, peak_val, trough_val
+
+
+def _calc_mdd_recovery(
+    eq_values:   list[float],
+    eq_ts_list:  list[int],
+    trough_ts:   int,
+    peak_val:    float,
+) -> Optional[float]:
+    """Tính thời gian hồi phục sau MDD (ngày).
+
+    Args:
+        eq_values: Danh sách giá trị equity.
+        eq_ts_list: Danh sách timestamp tương ứng.
+        trough_ts: Timestamp của điểm đáy MDD.
+        peak_val: Giá trị equity tại đỉnh MDD.
+
+    Returns:
+        Số ngày hồi phục, hoặc None nếu chưa hồi phục.
+    """
+    for ts_i, eq_i in zip(eq_ts_list, eq_values):
+        if ts_i > trough_ts and eq_i >= peak_val:
+            return round((ts_i - trough_ts) / 86_400_000, 1)
+    return None
+
+
 # ── Background job runner ─────────────────────────────────────────────────────
 
 async def _run_job(job_id: str, bot, account, req):
     """Chạy backtest trong background, cập nhật _jobs[job_id]."""
-    parameters = bot.parameters or {}
-    market_type = parameters.get("market_type", "futures")
-
-    if account:
-        exchange = BinanceExchange(
-            api_key=account.api_key, api_secret=account.api_secret,
-            mode=account.mode, market_type=market_type,
-        )
-    else:
-        exchange = create_exchange_from_env()
-        exchange.market_type = market_type
+    parameters = dict(bot.parameters or {})
+    # Override SL/TP nếu được truyền từ request
+    if getattr(req, "stop_loss_pct", None) is not None:
+        parameters["stop_loss_pct"] = float(req.stop_loss_pct)
+    if getattr(req, "take_profit_pct", None) is not None:
+        parameters["take_profit_pct"] = float(req.take_profit_pct)
+    if getattr(req, "timeframe", None):
+        parameters["timeframe"] = req.timeframe
 
     try:
         start_dt = datetime.strptime(req.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -2288,54 +2111,23 @@ async def _run_job(job_id: str, bot, account, req):
         end_ms = int(end_dt.timestamp() * 1000)
         end_date_str = end_dt.strftime("%Y-%m-%d")
 
-        # Validate: start phải trước end
         if start_ms >= end_ms:
             raise ValueError(
-                f"Ngày bắt đầu ({req.start_date}) phải trước ngày kết thúc ({end_date_str}). "
-                f"Kiểm tra lại khoảng thời gian."
+                f"Ngày bắt đầu ({req.start_date}) phải trước ngày kết thúc ({end_date_str})."
             )
 
-        # Retry connect toi da 3 lan neu timeout
-        connect_ok = False
-        last_connect_err = None
-        for attempt in range(1, 4):
-            try:
-                _jobs[job_id]["message"] = f"Đang kết nối exchange (lần {attempt}/3)..."
-                await exchange.connect()
-                connect_ok = True
-                break
-            except Exception as e_conn:
-                last_connect_err = e_conn
-                logger.warning(f"Backtest [{job_id}]: connect attempt {attempt} failed: {e_conn}")
-                if attempt < 3:
-                    await _asyncio.sleep(3)
-                    # Tao lai exchange object de reset connection state
-                    if account:
-                        exchange = BinanceExchange(
-                            api_key=account.api_key, api_secret=account.api_secret,
-                            mode=account.mode, market_type=market_type,
-                        )
-                    else:
-                        exchange = create_exchange_from_env()
-                        exchange.market_type = market_type
+        symbols_raw = bot.symbols or ["BTCUSDT"]
+        symbol = _normalize_symbol(symbols_raw[0] if symbols_raw else "BTCUSDT")
 
-        if not connect_ok:
-            raise ValueError(
-                f"Không thể kết nối exchange sau 3 lần thử. "
-                f"Lỗi: {type(last_connect_err).__name__}: {last_connect_err}. "
-                f"Vui lòng thử lại sau."
-            )
-
-        result = await _run_backtest_engine(
-            bot=bot, exchange=exchange,
-            start_ms=start_ms, end_ms=end_ms,
-            initial_balance=req.initial_balance,
-            timeframe_override=req.timeframe or None,
-            sl_pct_override=req.stop_loss_pct,
-            tp_pct_override=req.take_profit_pct,
+        result = await _run_engine_job(
             job_id=job_id,
+            strategy_name=bot.strategy_name,
+            parameters=parameters,
+            symbol=symbol,
+            initial_balance=req.initial_balance,
+            start_ms=start_ms,
+            end_ms=end_ms,
         )
-        await exchange.close()
 
         _jobs[job_id]["message"] = "Đang xuất Excel..."
         _jobs[job_id]["progress"] = 95
@@ -2370,10 +2162,6 @@ async def _run_job(job_id: str, bot, account, req):
         logger.info(f"Backtest job {job_id} done: {result['summary']['total_trades']} trades")
 
     except Exception as e:
-        try:
-            await exchange.close()
-        except Exception:
-            pass
         logger.exception(f"Backtest job {job_id} error: {e}")
         _jobs[job_id].update({
             "status": "error",
@@ -2574,18 +2362,9 @@ async def run_strategy_backtest(req: StrategyBacktestRequest):
 
 
 async def _run_job_strategy(job_id: str, fake_bot, account, req: StrategyBacktestRequest):
-    """Background job cho run-strategy."""
+    """Background job cho run-strategy — dùng BacktestEngine mới."""
     parameters = fake_bot.parameters
-    market_type = parameters.get("market_type", "futures")
-
-    if account:
-        exchange = BinanceExchange(
-            api_key=account.api_key, api_secret=account.api_secret,
-            mode=account.mode, market_type=market_type,
-        )
-    else:
-        exchange = create_exchange_from_env()
-        exchange.market_type = market_type
+    symbol = _normalize_symbol(req.symbol)
 
     try:
         start_dt = datetime.strptime(req.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -2598,34 +2377,15 @@ async def _run_job_strategy(job_id: str, fake_bot, account, req: StrategyBacktes
         end_ms = int(end_dt.timestamp() * 1000)
         end_date_str = end_dt.strftime("%Y-%m-%d")
 
-        # Retry connect
-        connect_ok = False
-        last_err = None
-        for attempt in range(1, 4):
-            try:
-                _jobs[job_id]["message"] = f"Đang kết nối exchange (lần {attempt}/3)..."
-                await exchange.connect()
-                connect_ok = True
-                break
-            except Exception as e:
-                last_err = e
-                if attempt < 3:
-                    await _asyncio.sleep(3)
-                    if account:
-                        exchange = BinanceExchange(account.api_key, account.api_secret, account.mode, market_type)
-                    else:
-                        exchange = create_exchange_from_env()
-                        exchange.market_type = market_type
-        if not connect_ok:
-            raise ValueError(f"Không thể kết nối exchange: {last_err}")
-
-        result = await _run_backtest_engine(
-            bot=fake_bot, exchange=exchange,
-            start_ms=start_ms, end_ms=end_ms,
-            initial_balance=req.initial_balance,
+        result = await _run_engine_job(
             job_id=job_id,
+            strategy_name=req.strategy_name,
+            parameters=parameters,
+            symbol=symbol,
+            initial_balance=req.initial_balance,
+            start_ms=start_ms,
+            end_ms=end_ms,
         )
-        await exchange.close()
 
         _jobs[job_id]["message"] = "Đang xuất Excel..."
         _jobs[job_id]["progress"] = 95
@@ -2656,12 +2416,12 @@ async def _run_job_strategy(job_id: str, fake_bot, account, req: StrategyBacktes
             "chart_data": result.get("chart_data"),
         })
     except Exception as e:
-        try:
-            await exchange.close()
-        except Exception:
-            pass
         logger.exception(f"Strategy backtest job {job_id} error: {e}")
-        _jobs[job_id].update({"status": "error", "progress": 0, "message": f"Lỗi: {type(e).__name__}: {str(e)}", "error": str(e)})
+        _jobs[job_id].update({
+            "status": "error", "progress": 0,
+            "message": f"Lỗi: {type(e).__name__}: {str(e)}",
+            "error": str(e),
+        })
 
 
 @router.get("/chart-data/{job_id}")
@@ -2732,54 +2492,54 @@ async def _run_single_bulk(
     initial_balance: float,
     semaphore:       _asyncio.Semaphore,
 ) -> dict:
-    """Chay backtest cho 1 cap tien trong bulk job — co gioi han concurrency.
+    """Chạy backtest cho 1 cặp tiền trong bulk job — gọi trực tiếp engine.
 
-    Dung asyncio.Semaphore de dam bao khong qua max_concurrent backtest
-    chay cung luc, tranh qua tai CPU/RAM.
+    Dùng asyncio.Semaphore để đảm bảo không quá max_concurrent backtest
+    chạy cùng lúc. Không còn polling loop trung gian — gọi _run_engine_job()
+    trực tiếp để tối ưu hiệu năng.
 
     Args:
-        symbol: Cap tien (vd: "BTCUSDT").
-        strategy_name: Ten strategy.
-        parameters: Tham so strategy.
-        start_date: Ngay bat dau (YYYY-MM-DD).
-        end_date: Ngay ket thuc (YYYY-MM-DD hoac None).
-        initial_balance: Von ban dau (USDT).
-        semaphore: Semaphore gioi han concurrency.
+        symbol: Cặp tiền (vd: "BTCUSDT").
+        strategy_name: Tên strategy.
+        parameters: Tham số strategy.
+        start_date: Ngày bắt đầu (YYYY-MM-DD).
+        end_date: Ngày kết thúc (YYYY-MM-DD hoặc None).
+        initial_balance: Vốn ban đầu (USDT).
+        semaphore: Semaphore giới hạn concurrency.
 
     Returns:
-        Dict ket qua voi keys: symbol, status, metrics hoac error.
+        Dict kết quả với keys: symbol, status, metrics hoặc error.
     """
     async with semaphore:
         try:
-            # Tao StrategyBacktestRequest tuong duong
-            req = StrategyBacktestRequest(
+            norm_symbol = _normalize_symbol(symbol)
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            start_ms = int(start_dt.timestamp() * 1000)
+            if end_date:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                end_dt = end_dt.replace(hour=23, minute=59, second=59)
+            else:
+                end_dt = datetime.now(timezone.utc)
+            end_ms = int(end_dt.timestamp() * 1000)
+
+            # Tạo job_id tạm để _run_engine_job có thể cập nhật progress
+            bulk_sub_job_id = f"bulk_sub_{uuid.uuid4().hex[:8]}"
+            _jobs[bulk_sub_job_id] = {"status": "running", "progress": 0, "message": "", "result": None, "error": None}
+
+            result = await _run_engine_job(
+                job_id=bulk_sub_job_id,
                 strategy_name=strategy_name,
-                symbol=symbol,
-                start_date=start_date,
-                end_date=end_date,
+                parameters=parameters,
+                symbol=norm_symbol,
                 initial_balance=initial_balance,
-                **{k: v for k, v in parameters.items()
-                   if k in StrategyBacktestRequest.model_fields},
+                start_ms=start_ms,
+                end_ms=end_ms,
             )
-            # Goi endpoint run-strategy noi bo (khong qua HTTP)
-            response = await run_strategy_backtest(req)
-            job_id = response.get("job_id")
-            if not job_id:
-                return {"symbol": symbol, "status": "error", "error": "Khong tao duoc job"}
 
-            # Poll cho den khi job xong (timeout 10 phut)
-            result = await _poll_job_until_done(job_id, timeout_seconds=600)
-            if result is None:
-                return {"symbol": symbol, "status": "error", "error": "Timeout sau 10 phut"}
+            # Cleanup sub-job
+            _jobs.pop(bulk_sub_job_id, None)
 
-            if result.get("status") == "error":
-                return {
-                    "symbol": symbol,
-                    "status": "error",
-                    "error": result.get("message", "Unknown error"),
-                }
-
-            summary = (result.get("result") or {}).get("summary", {})
+            summary = result.get("summary", {})
             return _extract_bulk_metrics(symbol, summary)
 
         except Exception as exc:
@@ -2788,31 +2548,6 @@ async def _run_single_bulk(
                 "status": "error",
                 "error": f"{type(exc).__name__}: {str(exc)[:200]}",
             }
-
-
-async def _poll_job_until_done(
-    job_id:          str,
-    timeout_seconds: int = 600,
-    poll_interval:   float = 1.0,
-) -> Optional[dict]:
-    """Poll job store cho den khi job hoan thanh hoac timeout.
-
-    Args:
-        job_id: ID cua job can poll.
-        timeout_seconds: Timeout toi da (giay).
-        poll_interval: Khoang cach giua cac lan poll (giay).
-
-    Returns:
-        Job dict khi done/error, hoac None neu timeout.
-    """
-    elapsed = 0.0
-    while elapsed < timeout_seconds:
-        job = _jobs.get(job_id)
-        if job and job.get("status") in ("done", "error"):
-            return job
-        await _asyncio.sleep(poll_interval)
-        elapsed += poll_interval
-    return None
 
 
 def _extract_bulk_metrics(symbol: str, summary: dict) -> dict:
