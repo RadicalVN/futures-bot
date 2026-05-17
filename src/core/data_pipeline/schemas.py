@@ -19,6 +19,7 @@ class IntegrityStatus(str, Enum):
     BLOCK_OUTLIER   = "BLOCK_OUTLIER"
 
 class Candle1m(BaseModel):
+    model_config = {"frozen": True}
     symbol:    str
     open_time: datetime
     open:      float
@@ -28,6 +29,7 @@ class Candle1m(BaseModel):
     volume:    float
 
 class ResampledCandle(BaseModel):
+    model_config = {"frozen": True}
     symbol:     str
     timeframe:  str       # "5m", "15m", "1h", …
     open_time:  datetime
@@ -39,17 +41,20 @@ class ResampledCandle(BaseModel):
     volume:     float
 
 class AdapterConfig(BaseModel):
+    model_config = {"frozen": True}
     asset_class:       AssetClass
     outlier_threshold: float              # Ngưỡng động theo loại tài sản
     symbol_overrides:  dict[str, float] = {}  # Override theo từng symbol
 
 class HealGapEvent(BaseModel):
+    model_config = {"frozen": True}
     symbol:     str
     gap_start:  datetime
     gap_end:    datetime
     attempt_no: int = 1
 
 class IntegrityCheckResult(BaseModel):
+    model_config = {"frozen": True}
     is_valid:    bool
     status:      IntegrityStatus
     reason:      str | None       = None
